@@ -33,6 +33,7 @@ async function uploadChunked(files, options, onProgress) {
   let sentChunks = 0;
   for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
     const file = files[fileIndex];
+    onProgress(`Starting ${metadata[fileIndex].filename}`);
     for (let chunkIndex = 0; chunkIndex < metadata[fileIndex].totalChunks; chunkIndex++) {
       const start = chunkIndex * chunkSize;
       const chunk = file.slice(start, start + chunkSize);
@@ -43,9 +44,11 @@ async function uploadChunked(files, options, onProgress) {
       form.append("chunk", chunk, `${fileIndex}-${chunkIndex}.part`);
       await api("/api/resources/upload-chunk", { method: "POST", body: form });
       sentChunks++;
-      onProgress(`Uploading ${sentChunks} of ${totalChunks} parts...`);
+      onProgress(`Uploading ${metadata[fileIndex].filename}: part ${chunkIndex + 1} of ${metadata[fileIndex].totalChunks}. Total ${sentChunks} of ${totalChunks} parts.`);
     }
+    onProgress(`Finished sending ${metadata[fileIndex].filename}`);
   }
+  onProgress("Processing uploaded files...");
   return api("/api/resources/upload-complete", {
     method: "POST",
     body: {
@@ -124,7 +127,8 @@ function loginPage() {
         <p class="subtle">Sign in to read approved seminary resources.</p>
         <form class="form" id="loginForm">
           <label>Email <input name="email" type="email" autocomplete="email" required></label>
-          <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+          <label>Password <input id="loginPassword" name="password" type="password" autocomplete="current-password" required></label>
+          <label class="inline-check"><input id="showLoginPassword" type="checkbox"> Show password</label>
           <button>Sign in</button>
           <p class="error" id="loginError"></p>
         </form>
@@ -153,6 +157,9 @@ function loginPage() {
       document.querySelector("#loginError").textContent = error.message;
     }
   });
+  document.querySelector("#showLoginPassword").addEventListener("change", (event) => {
+    document.querySelector("#loginPassword").type = event.currentTarget.checked ? "text" : "password";
+  });
   document.querySelector("#setupForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = Object.fromEntries(new FormData(event.currentTarget));
@@ -176,13 +183,33 @@ async function loadLibrary() {
 
 async function libraryPage() {
   await loadLibrary();
-  const categorySlug = route().startsWith("/library/") ? decodeURIComponent(route().split("/").pop()) : "";
-  const currentCategory = state.categories.find((item) => item.slug === categorySlug);
-  const resources = currentCategory ? state.resources.filter((item) => item.categoryId === currentCategory.id) : state.resources;
+  const params = new URLSearchParams(window.location.search);
+  const categorySlug = params.get("category") || (route().startsWith("/library/") ? decodeURIComponent(route().split("/").pop()) : "");
+  const searchText = params.get("q") || "";
+  const currentCategory = state.categories.find((item) => item.slug === categorySlug || item.id === categorySlug);
+  const terms = searchText.toLowerCase().split(/\s+/).filter(Boolean);
+  const resources = state.resources.filter((resource) => {
+    const category = state.categories.find((item) => item.id === resource.categoryId);
+    const haystack = `${resource.title || ""} ${resource.author || ""} ${resource.format || ""} ${resource.originalFilename || ""} ${category?.name || ""}`.toLowerCase();
+    const categoryMatches = !currentCategory || resource.categoryId === currentCategory.id;
+    const textMatches = !terms.length || terms.some((term) => haystack.includes(term));
+    return categoryMatches && textMatches;
+  });
   layout(`
     <main class="page">
       <h1>${currentCategory ? currentCategory.name : "Library"}</h1>
       <p class="subtle">Browse approved PDF and EPUB resources by department.</p>
+      <form class="toolbar searchbar" id="librarySearchForm">
+        <label>Search any word <input id="librarySearchInput" name="q" value="${escapeAttr(searchText)}" placeholder="Title, author, topic, department"></label>
+        <label>Category
+          <select id="libraryCategoryInput" name="category">
+            <option value="">All categories</option>
+            ${state.categories.map((category) => `<option value="${category.slug}" ${currentCategory?.id === category.id ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("")}
+          </select>
+        </label>
+        <button>Search</button>
+        <button type="button" class="secondary" id="clearLibrarySearch">Clear</button>
+      </form>
       <div class="toolbar">
         <button class="secondary" data-link href="/library">All</button>
         ${state.categories.map((category) => `<button class="secondary" data-link href="/library/${category.slug}">${category.name}</button>`).join("")}
@@ -193,6 +220,20 @@ async function libraryPage() {
     </main>
   `);
   wireResourceButtons();
+  wireLibrarySearch();
+}
+
+function wireLibrarySearch() {
+  document.querySelector("#librarySearchForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const q = document.querySelector("#librarySearchInput").value.trim();
+    const category = document.querySelector("#libraryCategoryInput").value;
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (category) params.set("category", category);
+    go(`/library${params.toString() ? `?${params}` : ""}`);
+  });
+  document.querySelector("#clearLibrarySearch")?.addEventListener("click", () => go("/library"));
 }
 
 function resourceCard(resource) {
@@ -272,6 +313,7 @@ async function adminPage() {
             <button>Upload for review</button>
             <p class="subtle" id="uploadSelection">No files selected.</p>
             <p class="subtle" id="uploadStatus"></p>
+            <div class="upload-log" id="uploadLog"></div>
           </form>
         </div>
         <div class="panel">
@@ -337,7 +379,14 @@ function wireAdmin() {
   const folderInput = document.querySelector("#resourceFolder");
   const uploadSelection = document.querySelector("#uploadSelection");
   const uploadStatus = document.querySelector("#uploadStatus");
+  const uploadLog = document.querySelector("#uploadLog");
   const uploadButton = document.querySelector("#uploadForm button[type='submit'], #uploadForm button:not([type])");
+  const addUploadLog = (message) => {
+    const line = document.createElement("div");
+    line.textContent = message;
+    uploadLog.appendChild(line);
+    uploadLog.scrollTop = uploadLog.scrollHeight;
+  };
   const selectedUploadFiles = () => [...resourceInput.files, ...folderInput.files];
   const updateUploadSelection = () => {
     const files = selectedUploadFiles();
@@ -362,11 +411,13 @@ function wireAdmin() {
     };
     try {
       uploadButton.disabled = true;
+      uploadLog.innerHTML = "";
       uploadStatus.textContent = "Uploading...";
       let data;
       if (totalSize > 4 * 1024 * 1024) {
         data = await uploadChunked(files, options, (message) => {
           uploadStatus.textContent = message;
+          addUploadLog(message);
         });
       } else {
         const form = new FormData();
@@ -375,12 +426,17 @@ function wireAdmin() {
         for (const file of files) {
           form.append("files", file, file.webkitRelativePath || file.name);
         }
+        files.forEach((file) => addUploadLog(`Uploading ${file.webkitRelativePath || file.name}`));
         data = await api("/api/resources/upload", { method: "POST", body: form });
       }
       uploadStatus.textContent = `${data.resources.length} file(s) uploaded for review.`;
-      await adminPage();
+      data.resources.forEach((resource) => addUploadLog(`Ready for review: ${resource.title}`));
+      await loadLibrary();
+      state.reports = await api("/api/reports");
+      document.querySelector("tbody").innerHTML = state.resources.map(adminResourceRow).join("");
     } catch (error) {
       uploadStatus.textContent = error.message;
+      addUploadLog(`Error: ${error.message}`);
     } finally {
       uploadButton.disabled = false;
     }
