@@ -175,6 +175,11 @@ function makeCookie(sessionId) {
   return `library_session=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`;
 }
 
+function makeBootstrapCookie(email) {
+  const payload = Buffer.from(JSON.stringify({ email, role: "admin" })).toString("base64url");
+  return `bootstrap_admin=${payload}.${sign(payload)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`;
+}
+
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || "").split(";").filter(Boolean).map((part) => {
     const [key, ...value] = part.trim().split("=");
@@ -183,6 +188,16 @@ function parseCookies(req) {
 }
 
 async function currentUser(req) {
+  const bootstrap = parseCookies(req).bootstrap_admin;
+  if (bootstrap) {
+    const [payload, signature] = bootstrap.split(".");
+    if (payload && signature === sign(payload)) {
+      const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+      if (data.email === ADMIN_EMAIL && data.role === "admin") {
+        return { id: "bootstrap-admin", email: data.email, name: "Library Administrator", role: "admin", provider: "env", active: true };
+      }
+    }
+  }
   const raw = parseCookies(req).library_session;
   if (!raw) return null;
   const [sessionId, signature] = raw.split(".");
@@ -353,6 +368,10 @@ async function routeApi(req, res, url) {
     const email = String(body.email || "").toLowerCase();
     const found = await db.findOne("users", (item) => item.email === email && item.active !== false);
     const bootstrapAdmin = email === ADMIN_EMAIL && ADMIN_BOOTSTRAP_PASSWORD && body.password === ADMIN_BOOTSTRAP_PASSWORD;
+    if (bootstrapAdmin) {
+      res.setHeader("Set-Cookie", makeBootstrapCookie(ADMIN_EMAIL));
+      return json(res, 200, { user: { id: "bootstrap-admin", email: ADMIN_EMAIL, name: "Library Administrator", role: "admin", provider: "env", active: true } });
+    }
     if ((!found || !verifyPassword(body.password, found.passwordHash)) && !bootstrapAdmin) return json(res, 401, { error: "Invalid email or password." });
     const loginUser = found || await db.insert("users", { email: ADMIN_EMAIL, name: "Library Administrator", role: "admin", passwordHash: "", provider: "env", active: true });
     const session = await db.insert("loginSessions", {
@@ -384,7 +403,10 @@ async function routeApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/auth/logout") {
     if (user?.sessionId) await db.update("loginSessions", user.sessionId, { endedAt: new Date().toISOString() });
-    res.setHeader("Set-Cookie", "library_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    res.setHeader("Set-Cookie", [
+      "library_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+      "bootstrap_admin=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+    ]);
     return json(res, 200, { ok: true });
   }
 
