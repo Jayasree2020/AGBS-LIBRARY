@@ -304,7 +304,7 @@ async function unpackUpload(file) {
       .filter((entry) => !entry.isDirectory)
       .map((entry) => ({
         name: "files",
-        filename: path.basename(entry.entryName),
+        filename: entry.entryName,
         contentType: mimeTypes[path.extname(entry.entryName).toLowerCase()] || "application/octet-stream",
         content: entry.getData()
       }));
@@ -503,6 +503,7 @@ async function routeApi(req, res, url) {
         metadata: { size: file.content.length, contentType: file.contentType }
       }));
     }
+    if (!saved.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
     return json(res, 201, { resources: saved });
   }
 

@@ -219,11 +219,8 @@ async function adminPage() {
         <div class="panel">
           <h2>Upload books</h2>
           <form class="form" id="uploadForm">
-            <label>PDF, EPUB, image, ZIP, or folder <input type="file" id="resourceFiles" name="files" accept=".pdf,.epub,.zip,.png,.jpg,.jpeg,.webp,.gif" multiple required></label>
-            <div class="toolbar compact">
-              <button type="button" class="secondary" id="chooseFilesBtn">Choose files</button>
-              <button type="button" class="secondary" id="chooseFolderBtn">Choose folder</button>
-            </div>
+            <label>Choose files <input type="file" id="resourceFiles" name="files" accept=".pdf,.epub,.zip,.png,.jpg,.jpeg,.webp,.gif" multiple></label>
+            <label>Choose folder <input type="file" id="resourceFolder" name="folder" webkitdirectory directory multiple></label>
             <label>Upload handling
               <select name="autoCategorize" id="autoCategorize">
                 <option value="true">Auto-categorize by file and folder names</option>
@@ -236,6 +233,7 @@ async function adminPage() {
               </select>
             </label>
             <button>Upload for review</button>
+            <p class="subtle" id="uploadSelection">No files selected.</p>
             <p class="subtle" id="uploadStatus"></p>
           </form>
         </div>
@@ -299,30 +297,48 @@ function reportTable() {
 
 function wireAdmin() {
   const resourceInput = document.querySelector("#resourceFiles");
-  document.querySelector("#chooseFilesBtn").addEventListener("click", () => {
-    resourceInput.removeAttribute("webkitdirectory");
-    resourceInput.removeAttribute("directory");
-    resourceInput.click();
-  });
-  document.querySelector("#chooseFolderBtn").addEventListener("click", () => {
-    resourceInput.setAttribute("webkitdirectory", "");
-    resourceInput.setAttribute("directory", "");
-    resourceInput.click();
-  });
+  const folderInput = document.querySelector("#resourceFolder");
+  const uploadSelection = document.querySelector("#uploadSelection");
+  const uploadStatus = document.querySelector("#uploadStatus");
+  const uploadButton = document.querySelector("#uploadForm button[type='submit'], #uploadForm button:not([type])");
+  const selectedUploadFiles = () => [...resourceInput.files, ...folderInput.files];
+  const updateUploadSelection = () => {
+    const files = selectedUploadFiles();
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+    const mb = (totalSize / 1024 / 1024).toFixed(2);
+    uploadSelection.textContent = files.length ? `${files.length} file(s) selected, ${mb} MB total.` : "No files selected.";
+    uploadStatus.textContent = totalSize > 4 * 1024 * 1024 ? "This folder is too large for the current Vercel preview upload. Use a smaller folder or ZIP under 4 MB until permanent storage is connected." : "";
+  };
+  resourceInput.addEventListener("change", updateUploadSelection);
+  folderInput.addEventListener("change", updateUploadSelection);
   document.querySelector("#uploadForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const files = selectedUploadFiles();
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+    if (!files.length) {
+      uploadStatus.textContent = "Choose files or a folder first.";
+      return;
+    }
+    if (totalSize > 4 * 1024 * 1024) {
+      uploadStatus.textContent = "This upload is too large for the current Vercel preview. Please upload a smaller folder or ZIP under 4 MB.";
+      return;
+    }
     const form = new FormData();
     form.append("autoCategorize", document.querySelector("#autoCategorize").value);
     form.append("targetCategoryId", document.querySelector("#targetCategoryId").value);
-    for (const file of resourceInput.files) {
+    for (const file of files) {
       form.append("files", file, file.webkitRelativePath || file.name);
     }
     try {
+      uploadButton.disabled = true;
+      uploadStatus.textContent = "Uploading...";
       const data = await api("/api/resources/upload", { method: "POST", body: form });
-      document.querySelector("#uploadStatus").textContent = `${data.resources.length} file(s) uploaded for review.`;
+      uploadStatus.textContent = `${data.resources.length} file(s) uploaded for review.`;
       await adminPage();
     } catch (error) {
-      document.querySelector("#uploadStatus").textContent = error.message;
+      uploadStatus.textContent = error.message;
+    } finally {
+      uploadButton.disabled = false;
     }
   });
   document.querySelector("#userForm").addEventListener("submit", async (event) => {
