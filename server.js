@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,8 +25,9 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${BASE_URL}/auth/google/callback`;
-const DATA_DIR = path.join(__dirname, "data");
-const STORAGE_DIR = path.join(__dirname, "storage");
+const RUNTIME_DIR = process.env.VERCEL ? path.join(os.tmpdir(), "agbs-library") : __dirname;
+const DATA_DIR = path.join(RUNTIME_DIR, "data");
+const STORAGE_DIR = path.join(RUNTIME_DIR, "storage");
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const defaultCategories = [

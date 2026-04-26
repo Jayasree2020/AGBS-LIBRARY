@@ -16,7 +16,7 @@ The local preview uses JSON files under `data/` and stores uploaded resources un
 
 ## Deploy
 
-The project includes `vercel.json` for Vercel preview deployments. For real book uploads in production, configure `MONGODB_URI` and move uploaded files to durable object storage such as Vercel Blob or S3-compatible storage.
+The project includes `vercel.json` for Vercel preview deployments. Without `MONGODB_URI`, Vercel uses temporary `/tmp` preview storage that can reset between function starts. For real book uploads in production, configure `MONGODB_URI` and move uploaded files to durable object storage such as Vercel Blob or S3-compatible storage.
 
 ## Security notes
 
