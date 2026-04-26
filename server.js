@@ -577,10 +577,13 @@ function sendFile(res, filePath) {
   createReadStream(filePath).pipe(res);
 }
 
-await db.init();
-await seed();
+const ready = (async () => {
+  await db.init();
+  await seed();
+})();
 
-http.createServer(async (req, res) => {
+export default async function handler(req, res) {
+  await ready;
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname.startsWith("/api/")) return await routeApi(req, res, url);
@@ -591,6 +594,10 @@ http.createServer(async (req, res) => {
     console.error(error);
     return json(res, 500, { error: "Server error." });
   }
-}).listen(PORT, () => {
-  console.log(`AGBS LIBRARY running at http://localhost:${PORT}`);
-});
+}
+
+if (!process.env.VERCEL) {
+  http.createServer(handler).listen(PORT, () => {
+    console.log(`AGBS LIBRARY running at http://localhost:${PORT}`);
+  });
+}

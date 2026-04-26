@@ -14,6 +14,10 @@ On this Windows machine, you can also double-click `START-AGBS-LIBRARY.cmd` and 
 
 The local preview uses JSON files under `data/` and stores uploaded resources under `storage/`. For production, set `MONGODB_URI` and deploy with the dependencies in `package.json` installed.
 
+## Deploy
+
+The project includes `vercel.json` for Vercel preview deployments. For real book uploads in production, configure `MONGODB_URI` and move uploaded files to durable object storage such as Vercel Blob or S3-compatible storage.
+
 ## Security notes
 
 - Do not commit `.env`, MongoDB credentials, Google OAuth secrets, or passwords.
