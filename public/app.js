@@ -20,6 +20,43 @@ async function api(path, options = {}) {
   return data;
 }
 
+async function uploadChunked(files, options, onProgress) {
+  const uploadId = crypto.randomUUID();
+  const chunkSize = 1024 * 1024;
+  const metadata = files.map((file, fileIndex) => ({
+    fileIndex,
+    filename: file.webkitRelativePath || file.name,
+    contentType: file.type,
+    totalChunks: Math.max(1, Math.ceil(file.size / chunkSize))
+  }));
+  const totalChunks = metadata.reduce((sum, file) => sum + file.totalChunks, 0);
+  let sentChunks = 0;
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+    const file = files[fileIndex];
+    for (let chunkIndex = 0; chunkIndex < metadata[fileIndex].totalChunks; chunkIndex++) {
+      const start = chunkIndex * chunkSize;
+      const chunk = file.slice(start, start + chunkSize);
+      const form = new FormData();
+      form.append("uploadId", uploadId);
+      form.append("fileIndex", String(fileIndex));
+      form.append("chunkIndex", String(chunkIndex));
+      form.append("chunk", chunk, `${fileIndex}-${chunkIndex}.part`);
+      await api("/api/resources/upload-chunk", { method: "POST", body: form });
+      sentChunks++;
+      onProgress(`Uploading ${sentChunks} of ${totalChunks} parts...`);
+    }
+  }
+  return api("/api/resources/upload-complete", {
+    method: "POST",
+    body: {
+      uploadId,
+      files: metadata,
+      autoCategorize: options.autoCategorize,
+      targetCategoryId: options.targetCategoryId
+    }
+  });
+}
+
 function route() {
   return window.location.pathname;
 }
@@ -307,7 +344,7 @@ function wireAdmin() {
     const totalSize = files.reduce((sum, file) => sum + file.size, 0);
     const mb = (totalSize / 1024 / 1024).toFixed(2);
     uploadSelection.textContent = files.length ? `${files.length} file(s) selected, ${mb} MB total.` : "No files selected.";
-    uploadStatus.textContent = totalSize > 4 * 1024 * 1024 ? "This folder is too large for the current Vercel preview upload. Use a smaller folder or ZIP under 4 MB until permanent storage is connected." : "";
+    uploadStatus.textContent = totalSize > 4 * 1024 * 1024 ? "Large upload mode will send this folder in smaller parts." : "";
   };
   resourceInput.addEventListener("change", updateUploadSelection);
   folderInput.addEventListener("change", updateUploadSelection);
@@ -319,20 +356,27 @@ function wireAdmin() {
       uploadStatus.textContent = "Choose files or a folder first.";
       return;
     }
-    if (totalSize > 4 * 1024 * 1024) {
-      uploadStatus.textContent = "This upload is too large for the current Vercel preview. Please upload a smaller folder or ZIP under 4 MB.";
-      return;
-    }
-    const form = new FormData();
-    form.append("autoCategorize", document.querySelector("#autoCategorize").value);
-    form.append("targetCategoryId", document.querySelector("#targetCategoryId").value);
-    for (const file of files) {
-      form.append("files", file, file.webkitRelativePath || file.name);
-    }
+    const options = {
+      autoCategorize: document.querySelector("#autoCategorize").value === "true",
+      targetCategoryId: document.querySelector("#targetCategoryId").value
+    };
     try {
       uploadButton.disabled = true;
       uploadStatus.textContent = "Uploading...";
-      const data = await api("/api/resources/upload", { method: "POST", body: form });
+      let data;
+      if (totalSize > 4 * 1024 * 1024) {
+        data = await uploadChunked(files, options, (message) => {
+          uploadStatus.textContent = message;
+        });
+      } else {
+        const form = new FormData();
+        form.append("autoCategorize", String(options.autoCategorize));
+        form.append("targetCategoryId", options.targetCategoryId);
+        for (const file of files) {
+          form.append("files", file, file.webkitRelativePath || file.name);
+        }
+        data = await api("/api/resources/upload", { method: "POST", body: form });
+      }
       uploadStatus.textContent = `${data.resources.length} file(s) uploaded for review.`;
       await adminPage();
     } catch (error) {

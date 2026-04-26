@@ -61,6 +61,7 @@ const mimeTypes = {
 };
 
 const allowedResourceExtensions = [".pdf", ".epub", ".png", ".jpg", ".jpeg", ".webp", ".gif"];
+const CHUNK_DIR = path.join(STORAGE_DIR, "chunks");
 
 class JsonStore {
   constructor(dir) {
@@ -313,6 +314,38 @@ async function unpackUpload(file) {
   }
 }
 
+async function saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch }) {
+  const saved = [];
+  for (const file of files) {
+    const extension = path.extname(file.filename).toLowerCase();
+    if (!allowedResourceExtensions.includes(extension)) continue;
+    const suggested = categorySuggestion(file.filename);
+    const category = autoCategorize ? (categories.find((item) => item.name === suggested) || selectedCategory) : selectedCategory;
+    const storageName = `${crypto.randomUUID()}${extension}`;
+    await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
+    const title = path.basename(file.filename, extension).replace(/[_-]+/g, " ").trim();
+    saved.push(await db.insert("resources", {
+      title,
+      author: "",
+      format: extension.slice(1),
+      originalFilename: file.filename,
+      storageName,
+      categoryId: category?.id || "",
+      suggestedCategory: suggested,
+      uploadMode: autoCategorize ? "auto" : "category",
+      status: "pending",
+      uploadBatchId: batch.id,
+      createdBy: user.id,
+      metadata: { size: file.content.length, contentType: file.contentType }
+    }));
+  }
+  return saved;
+}
+
+function safeChunkName(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
 function isStaff(user) {
   return user && ["admin", "director"].includes(user.role);
 }
@@ -479,30 +512,56 @@ async function routeApi(req, res, url) {
     const categories = await db.all("categories");
     const selectedCategory = categories.find((item) => item.id === targetCategoryId) || categories[0];
     const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: files.length, status: "processed" });
-    const saved = [];
-    for (const file of files) {
-      const extension = path.extname(file.filename).toLowerCase();
-      if (!allowedResourceExtensions.includes(extension)) continue;
-      const suggested = categorySuggestion(file.filename);
-      const category = autoCategorize ? (categories.find((item) => item.name === suggested) || selectedCategory) : selectedCategory;
-      const storageName = `${crypto.randomUUID()}${extension}`;
-      await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
-      const title = path.basename(file.filename, extension).replace(/[_-]+/g, " ").trim();
-      saved.push(await db.insert("resources", {
-        title,
-        author: "",
-        format: extension.slice(1),
-        originalFilename: file.filename,
-        storageName,
-        categoryId: category?.id || "",
-        suggestedCategory: suggested,
-        uploadMode: autoCategorize ? "auto" : "category",
-        status: "pending",
-        uploadBatchId: batch.id,
-        createdBy: user.id,
-        metadata: { size: file.content.length, contentType: file.contentType }
-      }));
+    const saved = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
+    if (!saved.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
+    return json(res, 201, { resources: saved });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/resources/upload-chunk") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const parts = await parseMultipart(req);
+    const chunk = parts.find((part) => part.filename);
+    if (!chunk) return json(res, 400, { error: "Missing upload chunk." });
+    const uploadId = safeChunkName(fieldValue(parts, "uploadId"));
+    const fileIndex = safeChunkName(fieldValue(parts, "fileIndex"));
+    const chunkIndex = safeChunkName(fieldValue(parts, "chunkIndex"));
+    if (!uploadId || !fileIndex || !chunkIndex) return json(res, 400, { error: "Missing chunk metadata." });
+    const dir = path.join(CHUNK_DIR, uploadId, fileIndex);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, `${chunkIndex}.part`), chunk.content);
+    return json(res, 200, { ok: true });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/resources/upload-complete") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const body = await bodyJson(req);
+    const uploadId = safeChunkName(body.uploadId);
+    const autoCategorize = body.autoCategorize !== false;
+    const categories = await db.all("categories");
+    const selectedCategory = categories.find((item) => item.id === body.targetCategoryId) || categories[0];
+    const assembled = [];
+    for (const meta of body.files || []) {
+      const fileIndex = safeChunkName(meta.fileIndex);
+      const totalChunks = Number(meta.totalChunks || 0);
+      const dir = path.join(CHUNK_DIR, uploadId, fileIndex);
+      const buffers = [];
+      for (let index = 0; index < totalChunks; index++) {
+        const chunkPath = path.join(dir, `${index}.part`);
+        if (!existsSync(chunkPath)) return json(res, 400, { error: `Missing chunk ${index + 1} for ${meta.filename}. Please try the upload again.` });
+        buffers.push(await fs.readFile(chunkPath));
+      }
+      assembled.push({
+        name: "files",
+        filename: meta.filename,
+        contentType: meta.contentType || mimeTypes[path.extname(meta.filename).toLowerCase()] || "application/octet-stream",
+        content: Buffer.concat(buffers)
+      });
     }
+    const files = [];
+    for (const uploaded of assembled) files.push(...await unpackUpload(uploaded));
+    const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: files.length, status: "processed", uploadMode: "chunked" });
+    const saved = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
+    await fs.rm(path.join(CHUNK_DIR, uploadId), { recursive: true, force: true });
     if (!saved.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
     return json(res, 201, { resources: saved });
   }
