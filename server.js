@@ -21,6 +21,7 @@ if (existsSync(path.join(__dirname, ".env"))) {
 const PORT = Number(process.env.PORT || 3000);
 const SESSION_SECRET = process.env.SESSION_SECRET || "local-dev-change-me";
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "agbsindia2020@gmail.com").toLowerCase();
+const ADMIN_BOOTSTRAP_PASSWORD = process.env.ADMIN_BOOTSTRAP_PASSWORD || "";
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
@@ -330,6 +331,14 @@ async function routeApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/me") return json(res, 200, { user: publicUser(user) });
 
+  if (req.method === "GET" && url.pathname === "/api/config") {
+    return json(res, 200, {
+      googleConfigured: Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
+      mongoConfigured: Boolean(process.env.MONGODB_URI),
+      adminEmail: ADMIN_EMAIL
+    });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/auth/setup") {
     const body = await bodyJson(req);
     const admin = await db.findOne("users", (item) => item.email === String(body.email || "").toLowerCase() && item.role === "admin");
@@ -343,17 +352,19 @@ async function routeApi(req, res, url) {
     const body = await bodyJson(req);
     const email = String(body.email || "").toLowerCase();
     const found = await db.findOne("users", (item) => item.email === email && item.active !== false);
-    if (!found || !verifyPassword(body.password, found.passwordHash)) return json(res, 401, { error: "Invalid email or password." });
+    const bootstrapAdmin = email === ADMIN_EMAIL && ADMIN_BOOTSTRAP_PASSWORD && body.password === ADMIN_BOOTSTRAP_PASSWORD;
+    if ((!found || !verifyPassword(body.password, found.passwordHash)) && !bootstrapAdmin) return json(res, 401, { error: "Invalid email or password." });
+    const loginUser = found || await db.insert("users", { email: ADMIN_EMAIL, name: "Library Administrator", role: "admin", passwordHash: "", provider: "env", active: true });
     const session = await db.insert("loginSessions", {
-      userId: found.id,
-      email: found.email,
+      userId: loginUser.id,
+      email: loginUser.email,
       startedAt: new Date().toISOString(),
       endedAt: null,
       ip: req.socket.remoteAddress,
       userAgent: req.headers["user-agent"] || ""
     });
     res.setHeader("Set-Cookie", makeCookie(session.id));
-    return json(res, 200, { user: publicUser(found) });
+    return json(res, 200, { user: publicUser(loginUser) });
   }
 
   if (req.method === "GET" && url.pathname === "/api/auth/google/start") {

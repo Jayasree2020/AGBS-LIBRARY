@@ -1,5 +1,6 @@
 const state = {
   user: null,
+  config: null,
   categories: [],
   resources: [],
   reports: null,
@@ -35,6 +36,10 @@ async function loadMe() {
   state.user = data.user;
 }
 
+async function loadConfig() {
+  state.config = await api("/api/config");
+}
+
 function layout(content) {
   const staff = ["admin", "director"].includes(state.user?.role);
   app.innerHTML = `
@@ -68,6 +73,13 @@ function wireLinks() {
 }
 
 function loginPage() {
+  const params = new URLSearchParams(window.location.search);
+  const googleMessage = {
+    "not-configured": "Google sign-in is not configured yet. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in Vercel environment variables.",
+    failed: "Google sign-in failed. Check the OAuth redirect URL in Google Cloud.",
+    unverified: "Google did not return a verified email address."
+  }[params.get("google")] || "";
+  const googleConfigured = state.config?.googleConfigured;
   app.innerHTML = `
     <main class="login-page">
       <section class="login-card">
@@ -81,7 +93,7 @@ function loginPage() {
         </form>
         <div class="form">
           <button class="secondary" id="googleBtn">Sign in with Google</button>
-          <p class="subtle">Google sign-in is active when OAuth credentials are configured on the server.</p>
+          <p class="${googleMessage ? "error" : "subtle"}">${googleMessage || (googleConfigured ? "Google sign-in is configured." : "Google sign-in needs OAuth environment variables in Vercel.")}</p>
         </div>
         <form class="form" id="setupForm">
           <p class="subtle">First admin setup only: enter the approved admin email and create a new password.</p>
@@ -327,6 +339,7 @@ function escapeAttr(value) {
 
 async function render() {
   try {
+    if (!state.config) await loadConfig();
     if (!state.user) await loadMe();
     if (!state.user || route() === "/login") return loginPage();
     if (route().startsWith("/admin")) return await adminPage();
