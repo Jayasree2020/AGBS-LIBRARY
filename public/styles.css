@@ -161,6 +161,10 @@ label {
   margin: 18px 0;
 }
 
+.toolbar.compact {
+  margin: 0;
+}
+
 .card {
   padding: 16px;
   display: grid;

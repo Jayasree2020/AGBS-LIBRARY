@@ -47,8 +47,15 @@ const mimeTypes = {
   ".json": "application/json; charset=utf-8",
   ".pdf": "application/pdf",
   ".epub": "application/epub+zip",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
   ".svg": "image/svg+xml"
 };
+
+const allowedResourceExtensions = [".pdf", ".epub", ".png", ".jpg", ".jpeg", ".webp", ".gif"];
 
 class JsonStore {
   constructor(dir) {
@@ -324,6 +331,11 @@ function categorySuggestion(name) {
   return rules.find(([, words]) => words.some((word) => lower.includes(word)))?.[0] || "Theology";
 }
 
+function fieldValue(parts, name, fallback = "") {
+  const part = parts.find((item) => item.name === name && !item.filename);
+  return part ? part.content.toString("utf8") : fallback;
+}
+
 async function seed() {
   const existingCategories = await db.all("categories");
   if (!existingCategories.length) {
@@ -441,17 +453,20 @@ async function routeApi(req, res, url) {
     if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
     const parts = await parseMultipart(req);
     const uploadedFiles = parts.filter((part) => part.filename);
+    const autoCategorize = fieldValue(parts, "autoCategorize", "true") === "true";
+    const targetCategoryId = fieldValue(parts, "targetCategoryId", "");
     const files = [];
     for (const uploaded of uploadedFiles) files.push(...await unpackUpload(uploaded));
-    if (!files.length) return json(res, 400, { error: "Choose at least one PDF or EPUB file." });
+    if (!files.length) return json(res, 400, { error: "Choose at least one supported file." });
     const categories = await db.all("categories");
+    const selectedCategory = categories.find((item) => item.id === targetCategoryId) || categories[0];
     const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: files.length, status: "processed" });
     const saved = [];
     for (const file of files) {
       const extension = path.extname(file.filename).toLowerCase();
-      if (![".pdf", ".epub"].includes(extension)) continue;
+      if (!allowedResourceExtensions.includes(extension)) continue;
       const suggested = categorySuggestion(file.filename);
-      const category = categories.find((item) => item.name === suggested) || categories[0];
+      const category = autoCategorize ? (categories.find((item) => item.name === suggested) || selectedCategory) : selectedCategory;
       const storageName = `${crypto.randomUUID()}${extension}`;
       await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
       const title = path.basename(file.filename, extension).replace(/[_-]+/g, " ").trim();
@@ -463,6 +478,7 @@ async function routeApi(req, res, url) {
         storageName,
         categoryId: category?.id || "",
         suggestedCategory: suggested,
+        uploadMode: autoCategorize ? "auto" : "category",
         status: "pending",
         uploadBatchId: batch.id,
         createdBy: user.id,

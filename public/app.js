@@ -219,7 +219,22 @@ async function adminPage() {
         <div class="panel">
           <h2>Upload books</h2>
           <form class="form" id="uploadForm">
-            <label>PDF, EPUB, or ZIP files <input type="file" name="files" accept=".pdf,.epub,.zip" multiple required></label>
+            <label>PDF, EPUB, image, ZIP, or folder <input type="file" id="resourceFiles" name="files" accept=".pdf,.epub,.zip,.png,.jpg,.jpeg,.webp,.gif" multiple required></label>
+            <div class="toolbar compact">
+              <button type="button" class="secondary" id="chooseFilesBtn">Choose files</button>
+              <button type="button" class="secondary" id="chooseFolderBtn">Choose folder</button>
+            </div>
+            <label>Upload handling
+              <select name="autoCategorize" id="autoCategorize">
+                <option value="true">Auto-categorize by file and folder names</option>
+                <option value="false">Put everything into one category</option>
+              </select>
+            </label>
+            <label>Category for manual uploads
+              <select name="targetCategoryId" id="targetCategoryId">
+                ${state.categories.map((category) => `<option value="${category.id}">${escapeHtml(category.name)}</option>`).join("")}
+              </select>
+            </label>
             <button>Upload for review</button>
             <p class="subtle" id="uploadStatus"></p>
           </form>
@@ -283,9 +298,25 @@ function reportTable() {
 }
 
 function wireAdmin() {
+  const resourceInput = document.querySelector("#resourceFiles");
+  document.querySelector("#chooseFilesBtn").addEventListener("click", () => {
+    resourceInput.removeAttribute("webkitdirectory");
+    resourceInput.removeAttribute("directory");
+    resourceInput.click();
+  });
+  document.querySelector("#chooseFolderBtn").addEventListener("click", () => {
+    resourceInput.setAttribute("webkitdirectory", "");
+    resourceInput.setAttribute("directory", "");
+    resourceInput.click();
+  });
   document.querySelector("#uploadForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    const form = new FormData();
+    form.append("autoCategorize", document.querySelector("#autoCategorize").value);
+    form.append("targetCategoryId", document.querySelector("#targetCategoryId").value);
+    for (const file of resourceInput.files) {
+      form.append("files", file, file.webkitRelativePath || file.name);
+    }
     try {
       const data = await api("/api/resources/upload", { method: "POST", body: form });
       document.querySelector("#uploadStatus").textContent = `${data.resources.length} file(s) uploaded for review.`;
