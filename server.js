@@ -34,10 +34,15 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const defaultCategories = [
   "Old Testament",
   "New Testament",
-  "Theology",
-  "Pastoral Care and Counseling",
+  "Christian Theology",
+  "History of Christianity",
+  "Christian Ministry",
   "Missiology",
-  "Social Analysis"
+  "Communication",
+  "Christian Ethics",
+  "Religions",
+  "Social Analysis",
+  "Women Studies"
 ];
 
 const mimeTypes = {
@@ -323,12 +328,17 @@ function categorySuggestion(name) {
   const rules = [
     ["Old Testament", ["old testament", "genesis", "exodus", "leviticus", "numbers", "deuteronomy", "psalm", "isaiah"]],
     ["New Testament", ["new testament", "gospel", "matthew", "mark", "luke", "john", "paul", "romans", "revelation"]],
-    ["Pastoral Care and Counseling", ["pastoral", "counsel", "care", "chaplain", "grief"]],
+    ["Christian Theology", ["christian theology", "theology", "doctrine", "christology", "pneumatology", "ecclesiology", "trinity"]],
+    ["History of Christianity", ["history of christianity", "church history", "christian history", "patristic", "reformation", "medieval", "ancient church"]],
+    ["Christian Ministry", ["christian ministry", "ministry", "pastoral", "counsel", "care", "chaplain", "grief", "preaching", "homiletic", "worship"]],
     ["Missiology", ["mission", "missiology", "evangel", "church planting"]],
-    ["Social Analysis", ["social", "society", "justice", "analysis", "politic", "econom"]],
-    ["Theology", ["theology", "doctrine", "christology", "pneumatology", "ecclesiology"]]
+    ["Communication", ["communication", "media", "journalism", "public speaking", "writing", "broadcast"]],
+    ["Christian Ethics", ["christian ethics", "ethics", "moral", "bioethics", "justice", "virtue"]],
+    ["Religions", ["religion", "religions", "hindu", "islam", "buddhist", "buddhism", "interfaith", "comparative"]],
+    ["Social Analysis", ["social", "society", "analysis", "politic", "econom", "caste", "culture", "development"]],
+    ["Women Studies", ["women", "woman", "gender", "feminist", "feminism", "womanist"]]
   ];
-  return rules.find(([, words]) => words.some((word) => lower.includes(word)))?.[0] || "Theology";
+  return rules.find(([, words]) => words.some((word) => lower.includes(word)))?.[0] || "Christian Theology";
 }
 
 function fieldValue(parts, name, fallback = "") {
@@ -337,11 +347,19 @@ function fieldValue(parts, name, fallback = "") {
 }
 
 async function seed() {
-  const existingCategories = await db.all("categories");
-  if (!existingCategories.length) {
-    for (let index = 0; index < defaultCategories.length; index++) {
-      await db.insert("categories", { name: defaultCategories[index], slug: slug(defaultCategories[index]), order: index, archived: false });
+  let existingCategories = await db.all("categories");
+  for (let index = 0; index < defaultCategories.length; index++) {
+    const name = defaultCategories[index];
+    const existing = existingCategories.find((category) => category.name === name || category.slug === slug(name));
+    if (existing) {
+      await db.update("categories", existing.id, { name, slug: slug(name), order: index, archived: false });
+    } else {
+      await db.insert("categories", { name, slug: slug(name), order: index, archived: false });
     }
+  }
+  existingCategories = await db.all("categories");
+  for (const category of existingCategories) {
+    if (!defaultCategories.includes(category.name)) await db.update("categories", category.id, { archived: true });
   }
   const admin = await db.findOne("users", (user) => user.email === ADMIN_EMAIL);
   if (!admin) {
