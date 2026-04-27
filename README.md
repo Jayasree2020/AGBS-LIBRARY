@@ -13,7 +13,9 @@ Fallback Vercel URL: [https://agbs-library.vercel.app](https://agbs-library.verc
 - Lets admins upload individual files, ZIP files, or whole folders.
 - Supports PDF, EPUB, PNG, JPG, JPEG, WEBP, and GIF files.
 - Suggests categories from file and folder names.
-- Keeps uploaded resources pending until admin review.
+- Adds uploaded resources directly to the library after upload.
+- Skips duplicate files automatically and shows skipped files only to admins.
+- Lets admins view, save/update metadata, replace, and remove uploaded files.
 - Tracks login sessions, reading sessions, opened books, and reading time.
 - Keeps download links out of the interface and serves files through authenticated routes.
 
@@ -38,7 +40,16 @@ Admins can upload normal files, a ZIP archive, or a full folder. The upload scre
 - `Auto-categorize`: the app uses file and folder names to suggest the correct department.
 - `Manual category`: the whole upload batch goes into one selected department.
 
-Uploaded resources remain in review until an admin publishes them.
+Uploaded resources are published automatically and appear immediately in the student library list. Duplicate files are skipped instead of being added again. Admins can review skipped files in the admin dashboard and re-upload only when needed.
+
+Admins can manage files after upload:
+
+- `View`: open the protected file route.
+- `Save`: update title/category edits.
+- `Replace`: upload a new file in place of an existing file.
+- `Remove`: delete the library record and stored file.
+
+Large uploads are sent in smaller internal chunks so Vercel can receive them safely. The finished library item is still the original PDF, EPUB, or image file, not a visible chunk or part.
 
 ## Deployment
 
@@ -46,7 +57,7 @@ The app is deployed on Vercel under the `agbs-library` project and is connected 
 
 [https://www.agbslibrary.com](https://www.agbslibrary.com)
 
-Vercel is suitable for the live preview and app interface. For long-term production use with many large PDF/EPUB files, connect durable storage such as Vercel Blob, S3-compatible storage, or another file-storage provider. Vercel serverless temporary storage can reset and should not be treated as permanent book storage.
+Vercel is suitable for the live app interface. For long-term production use with many large PDF/EPUB files, durable file storage is required. The app supports MongoDB-backed file storage through GridFS when `MONGODB_URI` is configured. Vercel serverless temporary storage can reset and should not be treated as permanent book storage by itself.
 
 ## Environment Variables
 
@@ -85,3 +96,9 @@ On this Windows workspace, `START-AGBS-LIBRARY.cmd` can also start the local ser
 - Admin-only routes are protected server-side.
 - Resources are served through authenticated app routes.
 - Browser-level screenshots or copying cannot be fully prevented, but ordinary public download exposure is avoided.
+
+## Handover Document
+
+For a fuller project summary and continuation notes, see:
+
+[AGBS_LIBRARY_PROJECT_DOCUMENT.md](AGBS_LIBRARY_PROJECT_DOCUMENT.md)
