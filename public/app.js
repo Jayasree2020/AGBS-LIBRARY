@@ -3,6 +3,7 @@ const state = {
   config: null,
   categories: [],
   resources: [],
+  skippedUploads: [],
   reports: null,
   readingSessionId: null,
   activeUpload: null
@@ -219,9 +220,10 @@ async function libraryPage() {
         <button class="secondary" data-link href="/library">All</button>
         ${state.categories.map((category) => `<button class="secondary" data-link href="/library/${category.slug}">${category.name}</button>`).join("")}
       </div>
-      <section class="grid">
-        ${resources.length ? resources.map(resourceCard).join("") : `<div class="notice">No published resources are available here yet.</div>`}
-      </section>
+      <table class="table library-table">
+        <thead><tr><th>Title</th><th>Author</th><th>Category</th><th>Format</th><th>Action</th></tr></thead>
+        <tbody>${resources.length ? resources.map(libraryResourceRow).join("") : `<tr><td colspan="5">No resources are available here yet.</td></tr>`}</tbody>
+      </table>
     </main>
   `);
   wireResourceButtons();
@@ -241,16 +243,16 @@ function wireLibrarySearch() {
   document.querySelector("#clearLibrarySearch")?.addEventListener("click", () => go("/library"));
 }
 
-function resourceCard(resource) {
+function libraryResourceRow(resource) {
   const category = state.categories.find((item) => item.id === resource.categoryId);
   return `
-    <article class="card">
-      <span class="badge ${resource.status}">${resource.format}</span>
-      <h3>${escapeHtml(resource.title)}</h3>
-      <div class="subtle">${escapeHtml(resource.author || "Unknown author")}</div>
-      <div class="subtle">${escapeHtml(category?.name || "Uncategorized")}</div>
-      <button data-read="${resource.id}">Read</button>
-    </article>
+    <tr>
+      <td>${escapeHtml(resource.title)}</td>
+      <td>${escapeHtml(resource.author || "Unknown author")}</td>
+      <td>${escapeHtml(category?.name || "Uncategorized")}</td>
+      <td><span class="badge published">${escapeHtml(resource.format)}</span></td>
+      <td><button data-read="${resource.id}">Read</button></td>
+    </tr>
   `;
 }
 
@@ -293,11 +295,13 @@ async function endReading() {
 async function adminPage() {
   if (!["admin", "director"].includes(state.user?.role)) return layout(`<main class="page"><div class="notice">Admin access required.</div></main>`);
   await loadLibrary();
-  state.reports = (await api("/api/reports"));
+  const [reports, skipped] = await Promise.all([api("/api/reports"), api("/api/skipped-uploads")]);
+  state.reports = reports;
+  state.skippedUploads = skipped.skipped;
   layout(`
     <main class="page">
       <h1>Admin Dashboard</h1>
-      <p class="subtle">Upload resources, publish books, manage categories, and review student history.</p>
+      <p class="subtle">Upload resources, manage library files, manage categories, and review student history.</p>
       <section class="admin-panels">
         <div class="panel">
           <h2>Upload books</h2>
@@ -316,7 +320,7 @@ async function adminPage() {
               </select>
             </label>
             <div class="button-row">
-              <button type="submit" id="uploadSubmit">Upload for review</button>
+              <button type="submit" id="uploadSubmit">Upload to library</button>
               <button type="button" class="danger" id="stopUpload" disabled>Stop upload</button>
             </div>
             <p class="subtle" id="uploadSelection">No files selected.</p>
@@ -345,13 +349,14 @@ async function adminPage() {
         </div>
       </section>
       <div class="section-heading">
-        <h2>Resources awaiting/admin review</h2>
-        <button id="publishAllPending">Publish all pending</button>
+        <h2>Library files</h2>
       </div>
       <table class="table" id="resourceReviewTable">
-        <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Action</th></tr></thead>
+        <thead><tr><th>Title</th><th>Category</th><th>Format</th><th>Action</th></tr></thead>
         <tbody>${state.resources.length ? state.resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No uploaded resources yet.</td></tr>`}</tbody>
       </table>
+      <h2>Skipped duplicate uploads</h2>
+      <div id="skippedUploadsWrap">${skippedUploadsTable()}</div>
       <h2>Student history</h2>
       ${reportTable()}
     </main>
@@ -364,13 +369,32 @@ function adminResourceRow(resource) {
     <tr>
       <td><input data-title="${resource.id}" value="${escapeAttr(resource.title)}"></td>
       <td><select data-category="${resource.id}">${state.categories.map((category) => `<option value="${category.id}" ${category.id === resource.categoryId ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("")}</select></td>
-      <td><span class="badge ${resource.status}">${resource.status}</span></td>
+      <td><span class="badge published">${escapeHtml(resource.format)}</span></td>
       <td>
-        <button data-publish="${resource.id}">Publish</button>
         <button class="secondary" data-save="${resource.id}">Save</button>
         <button class="secondary" data-preview="${resource.id}">View</button>
+        <button class="secondary" data-replace="${resource.id}">Replace</button>
+        <input class="hidden-file" data-replace-input="${resource.id}" type="file" accept=".pdf,.epub,.png,.jpg,.jpeg,.webp,.gif">
+        <button class="danger" data-remove="${resource.id}">Remove</button>
       </td>
     </tr>
+  `;
+}
+
+function skippedUploadsTable() {
+  const rows = state.skippedUploads.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.filename)}</td>
+      <td>${escapeHtml(item.reason)}</td>
+      <td>${formatBytes(item.size)}</td>
+      <td>${escapeHtml(new Date(item.createdAt).toLocaleString())}</td>
+    </tr>
+  `).join("");
+  return `
+    <table class="table">
+      <thead><tr><th>File</th><th>Reason</th><th>Size</th><th>Skipped at</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4">No skipped duplicate uploads yet.</td></tr>`}</tbody>
+    </table>
   `;
 }
 
@@ -459,16 +483,20 @@ function wireAdmin() {
         files.forEach((file) => addUploadLog(`Uploading ${file.webkitRelativePath || file.name}`));
         data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal });
       }
-      uploadStatus.textContent = `${data.resources.length} file(s) uploaded for review.`;
-      data.resources.forEach((resource) => addUploadLog(`Ready for review: ${resource.title}`));
+      const skippedCount = data.skipped?.length || 0;
+      uploadStatus.textContent = `${data.resources.length} file(s) added to the library. ${skippedCount} skipped.`;
+      data.resources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
+      (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
       await loadLibrary();
       state.reports = await api("/api/reports");
+      state.skippedUploads = (await api("/api/skipped-uploads")).skipped;
       refreshResourceReviewTable();
+      refreshSkippedUploadsTable();
       wireResourceActions();
     } catch (error) {
       const stopped = error.name === "AbortError";
       uploadStatus.textContent = stopped ? "Upload stopped." : error.message;
-      addUploadLog(stopped ? "Upload stopped before publishing for review." : `Error: ${error.message}`);
+      addUploadLog(stopped ? "Upload stopped before completion." : `Error: ${error.message}`);
     } finally {
       uploadButton.disabled = false;
       stopUploadButton.disabled = true;
@@ -496,11 +524,6 @@ function wireAdmin() {
     }
   });
   wireResourceActions();
-  document.querySelector("#publishAllPending").addEventListener("click", async () => {
-    const pending = state.resources.filter((resource) => resource.status !== "published");
-    await Promise.all(pending.map((resource) => api(`/api/resources/${resource.id}`, { method: "PATCH", body: { status: "published" } })));
-    await adminPage();
-  });
 }
 
 function refreshResourceReviewTable() {
@@ -509,16 +532,20 @@ function refreshResourceReviewTable() {
   body.innerHTML = state.resources.length ? state.resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No uploaded resources yet.</td></tr>`;
 }
 
+function refreshSkippedUploadsTable() {
+  const wrap = document.querySelector("#skippedUploadsWrap");
+  if (wrap) wrap.innerHTML = skippedUploadsTable();
+}
+
 function wireResourceActions() {
-  document.querySelectorAll("[data-publish], [data-save]").forEach((button) => {
+  document.querySelectorAll("[data-save]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const id = button.dataset.publish || button.dataset.save;
+      const id = button.dataset.save;
       await api(`/api/resources/${id}`, {
         method: "PATCH",
         body: {
           title: document.querySelector(`[data-title="${id}"]`).value,
-          categoryId: document.querySelector(`[data-category="${id}"]`).value,
-          status: button.dataset.publish ? "published" : undefined
+          categoryId: document.querySelector(`[data-category="${id}"]`).value
         }
       });
       await adminPage();
@@ -529,6 +556,33 @@ function wireResourceActions() {
       window.open(`/protected-file/${button.dataset.preview}`, "_blank", "noopener");
     });
   });
+  document.querySelectorAll("[data-replace]").forEach((button) => {
+    button.addEventListener("click", () => document.querySelector(`[data-replace-input="${button.dataset.replace}"]`).click());
+  });
+  document.querySelectorAll("[data-replace-input]").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const file = input.files[0];
+      if (!file) return;
+      const form = new FormData();
+      form.append("file", file, file.name);
+      await api(`/api/resources/${input.dataset.replaceInput}/replace`, { method: "POST", body: form });
+      await adminPage();
+    });
+  });
+  document.querySelectorAll("[data-remove]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!confirm("Remove this file from the library?")) return;
+      await api(`/api/resources/${button.dataset.remove}`, { method: "DELETE" });
+      await adminPage();
+    });
+  });
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
 function escapeHtml(value) {

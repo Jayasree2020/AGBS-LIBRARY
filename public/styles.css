@@ -45,6 +45,11 @@ button.danger {
   background: var(--bad);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 input,
 select {
   width: 100%;
@@ -284,6 +289,22 @@ label {
   padding: 10px;
   text-align: left;
   vertical-align: top;
+}
+
+.table td:last-child {
+  min-width: 260px;
+}
+
+.table td:last-child button {
+  margin: 2px;
+}
+
+.library-table td:last-child {
+  min-width: 80px;
+}
+
+.hidden-file {
+  display: none;
 }
 
 .reader {

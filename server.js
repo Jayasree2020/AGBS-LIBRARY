@@ -68,7 +68,7 @@ const INLINE_FILE_LIMIT = 8 * 1024 * 1024;
 class JsonStore {
   constructor(dir) {
     this.dir = dir;
-    this.collections = ["users", "categories", "resources", "uploadBatches", "loginSessions", "readingSessions", "accessEvents"];
+    this.collections = ["users", "categories", "resources", "uploadBatches", "loginSessions", "readingSessions", "accessEvents", "skippedUploads"];
   }
 
   async init() {
@@ -108,6 +108,13 @@ class JsonStore {
     records[index] = { ...records[index], ...patch, updatedAt: new Date().toISOString() };
     await this.write(collection, records);
     return records[index];
+  }
+
+  async delete(collection, id) {
+    const records = await this.all(collection);
+    const next = records.filter((item) => item.id !== id);
+    await this.write(collection, next);
+    return next.length !== records.length;
   }
 
   async findOne(collection, predicate) {
@@ -154,6 +161,11 @@ class MongoStore {
     return await this.findOne(collection, (item) => item.id === id);
   }
 
+  async delete(collection, id) {
+    const result = await this.collection(collection).deleteOne({ id });
+    return result.deletedCount > 0;
+  }
+
   async findOne(collection, predicate) {
     return (await this.all(collection)).find(predicate) || null;
   }
@@ -163,13 +175,18 @@ class MongoStore {
   }
 
   async saveFile(name, buffer, metadata = {}) {
-    await this.collection("resourceFiles.files").deleteMany({ filename: name });
+    await this.deleteFile(name);
     await new Promise((resolve, reject) => {
       Readable.from([buffer])
         .pipe(this.bucket.openUploadStream(name, { metadata }))
         .on("error", reject)
         .on("finish", resolve);
     });
+  }
+
+  async deleteFile(name) {
+    const files = await this.collection("resourceFiles.files").find({ filename: name }).toArray();
+    await Promise.all(files.map((file) => this.bucket.delete(file._id).catch(() => {})));
   }
 
   async readFile(name) {
@@ -342,9 +359,22 @@ async function unpackUpload(file) {
 
 async function saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch }) {
   const saved = [];
+  const skipped = [];
+  const existingResources = await db.all("resources");
+  const seenKeys = new Set(existingResources.map(resourceDuplicateKey).filter(Boolean));
+  const seenHashes = new Set(existingResources.map((resource) => resource.metadata?.hash).filter(Boolean));
   for (const file of files) {
     const extension = path.extname(file.filename).toLowerCase();
-    if (!allowedResourceExtensions.includes(extension)) continue;
+    const hash = fileHash(file.content);
+    const duplicateKey = uploadDuplicateKey(file.filename, file.content.length);
+    if (!allowedResourceExtensions.includes(extension)) {
+      skipped.push(await recordSkippedUpload({ file, reason: "Unsupported file type", user, batch, hash }));
+      continue;
+    }
+    if (seenHashes.has(hash) || seenKeys.has(duplicateKey)) {
+      skipped.push(await recordSkippedUpload({ file, reason: "Duplicate file already exists in the library", user, batch, hash }));
+      continue;
+    }
     const suggested = categorySuggestion(file.filename);
     const category = autoCategorize ? (categories.find((item) => item.name === suggested) || selectedCategory) : selectedCategory;
     const storageName = `${crypto.randomUUID()}${extension}`;
@@ -362,18 +392,81 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       categoryId: category?.id || "",
       suggestedCategory: suggested,
       uploadMode: autoCategorize ? "auto" : "category",
-      status: "pending",
+      status: "published",
       uploadBatchId: batch.id,
       createdBy: user.id,
       inlineContent: file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
-      metadata: { size: file.content.length, contentType: file.contentType }
+      metadata: { size: file.content.length, contentType: file.contentType, hash }
     }));
+    seenHashes.add(hash);
+    seenKeys.add(duplicateKey);
   }
-  return saved;
+  return { saved, skipped };
 }
 
 function safeChunkName(value) {
   return String(value ?? "").replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function fileHash(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function normalizeFilename(value) {
+  return path.basename(String(value || "")).trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function uploadDuplicateKey(filename, size) {
+  return `${normalizeFilename(filename)}:${Number(size || 0)}`;
+}
+
+function resourceDuplicateKey(resource) {
+  return uploadDuplicateKey(resource.originalFilename || resource.title, resource.metadata?.size);
+}
+
+async function recordSkippedUpload({ file, reason, user, batch, hash }) {
+  return await db.insert("skippedUploads", {
+    filename: file.filename,
+    normalizedFilename: normalizeFilename(file.filename),
+    reason,
+    uploadBatchId: batch.id,
+    createdBy: user.id,
+    size: file.content.length,
+    contentType: file.contentType,
+    hash,
+    checked: false
+  });
+}
+
+async function replaceResourceFile(resource, file, user) {
+  const extension = path.extname(file.filename).toLowerCase();
+  if (!allowedResourceExtensions.includes(extension)) throw new Error("Choose a supported PDF, EPUB, or image file.");
+  const existingResources = await db.all("resources");
+  const hash = fileHash(file.content);
+  const duplicateKey = uploadDuplicateKey(file.filename, file.content.length);
+  const duplicate = existingResources.find((item) => item.id !== resource.id && (item.metadata?.hash === hash || resourceDuplicateKey(item) === duplicateKey));
+  if (duplicate) throw new Error("This file already exists in the library, so it was not added again.");
+  const storageName = `${crypto.randomUUID()}${extension}`;
+  await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
+  if (typeof db.saveFile === "function") await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
+  await removeStoredFile(resource.storageName);
+  const title = path.basename(file.filename, extension).replace(/[_-]+/g, " ").trim();
+  return await db.update("resources", resource.id, {
+    title,
+    format: extension.slice(1),
+    originalFilename: file.filename,
+    storageName,
+    status: "published",
+    updatedBy: user.id,
+    inlineContent: file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
+    metadata: { size: file.content.length, contentType: file.contentType, hash }
+  });
+}
+
+async function removeStoredFile(storageName) {
+  if (!storageName) return;
+  await fs.rm(path.join(STORAGE_DIR, storageName), { force: true });
+  if (typeof db.deleteFile === "function") await db.deleteFile(storageName);
 }
 
 function isStaff(user) {
@@ -542,9 +635,9 @@ async function routeApi(req, res, url) {
     const categories = await db.all("categories");
     const selectedCategory = categories.find((item) => item.id === targetCategoryId) || categories[0];
     const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: files.length, status: "processed" });
-    const saved = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
-    if (!saved.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
-    return json(res, 201, { resources: saved });
+    const { saved, skipped } = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
+    if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
+    return json(res, 201, { resources: saved, skipped });
   }
 
   if (req.method === "POST" && url.pathname === "/api/resources/upload-chunk") {
@@ -599,10 +692,16 @@ async function routeApi(req, res, url) {
     const files = [];
     for (const uploaded of assembled) files.push(...await unpackUpload(uploaded));
     const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: files.length, status: "processed", uploadMode: "chunked" });
-    const saved = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
+    const { saved, skipped } = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
     await fs.rm(path.join(CHUNK_DIR, uploadId), { recursive: true, force: true });
-    if (!saved.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
-    return json(res, 201, { resources: saved });
+    if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
+    return json(res, 201, { resources: saved, skipped });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/skipped-uploads") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const skipped = (await db.all("skippedUploads")).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    return json(res, 200, { skipped });
   }
 
   if (req.method === "PATCH" && url.pathname.startsWith("/api/resources/")) {
@@ -612,6 +711,31 @@ async function routeApi(req, res, url) {
     const patch = {};
     for (const key of ["title", "author", "categoryId", "status"]) if (body[key] !== undefined) patch[key] = body[key];
     return json(res, 200, { resource: await db.update("resources", id, patch) });
+  }
+
+  if (req.method === "POST" && url.pathname.match(/^\/api\/resources\/[^/]+\/replace$/)) {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const id = url.pathname.split("/")[3];
+    const resource = await db.findOne("resources", (item) => item.id === id);
+    if (!resource) return json(res, 404, { error: "Resource not found." });
+    const parts = await parseMultipart(req);
+    const file = parts.find((part) => part.filename);
+    if (!file) return json(res, 400, { error: "Choose a replacement file." });
+    try {
+      return json(res, 200, { resource: await replaceResourceFile(resource, file, user) });
+    } catch (error) {
+      return json(res, 400, { error: error.message });
+    }
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/resources/")) {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const id = url.pathname.split("/").pop();
+    const resource = await db.findOne("resources", (item) => item.id === id);
+    if (!resource) return json(res, 404, { error: "Resource not found." });
+    await removeStoredFile(resource.storageName);
+    await db.delete("resources", id);
+    return json(res, 200, { ok: true });
   }
 
   if (req.method === "POST" && url.pathname === "/api/users") {
