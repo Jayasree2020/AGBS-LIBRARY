@@ -348,36 +348,15 @@ async function adminPage() {
         <h2>Resources awaiting/admin review</h2>
         <button id="publishAllPending">Publish all pending</button>
       </div>
-      <div id="categoryResourceSections">${categoryResourceSections()}</div>
+      <table class="table" id="resourceReviewTable">
+        <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>${state.resources.length ? state.resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No uploaded resources yet.</td></tr>`}</tbody>
+      </table>
       <h2>Student history</h2>
       ${reportTable()}
     </main>
   `);
   wireAdmin();
-}
-
-function categoryResourceSections() {
-  return state.categories.map((category) => {
-    const resources = state.resources.filter((resource) => resource.categoryId === category.id);
-    return `
-      <section class="category-section">
-        <div class="category-section-head">
-          <div>
-            <h3>${escapeHtml(category.name)}</h3>
-            <div class="subtle">${resources.length} resource(s)</div>
-          </div>
-          <form class="category-upload" data-category-upload="${category.id}">
-            <input type="file" webkitdirectory directory multiple aria-label="Upload folder to ${escapeAttr(category.name)}">
-            <button type="submit" class="secondary">Upload folder</button>
-          </form>
-        </div>
-        <table class="table">
-          <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Action</th></tr></thead>
-          <tbody>${resources.length ? resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No resources in this category yet.</td></tr>`}</tbody>
-        </table>
-      </section>
-    `;
-  }).join("");
 }
 
 function adminResourceRow(resource) {
@@ -389,6 +368,7 @@ function adminResourceRow(resource) {
       <td>
         <button data-publish="${resource.id}">Publish</button>
         <button class="secondary" data-save="${resource.id}">Save</button>
+        <button class="secondary" data-preview="${resource.id}">View</button>
       </td>
     </tr>
   `;
@@ -427,7 +407,7 @@ function wireAdmin() {
     const totalSize = files.reduce((sum, file) => sum + file.size, 0);
     const mb = (totalSize / 1024 / 1024).toFixed(2);
     uploadSelection.textContent = files.length ? `${files.length} file(s) selected, ${mb} MB total.` : "No files selected.";
-    uploadStatus.textContent = totalSize > 4 * 1024 * 1024 ? "Large upload mode will send this folder in smaller parts." : "";
+    uploadStatus.textContent = totalSize > 4 * 1024 * 1024 ? "Large upload mode will send each PDF/file safely, then place the finished files into folders." : "";
   };
   resourceInput.addEventListener("change", updateUploadSelection);
   folderInput.addEventListener("change", updateUploadSelection);
@@ -483,9 +463,8 @@ function wireAdmin() {
       data.resources.forEach((resource) => addUploadLog(`Ready for review: ${resource.title}`));
       await loadLibrary();
       state.reports = await api("/api/reports");
-      document.querySelector("#categoryResourceSections").innerHTML = categoryResourceSections();
+      refreshResourceReviewTable();
       wireResourceActions();
-      wireCategoryUploads();
     } catch (error) {
       const stopped = error.name === "AbortError";
       uploadStatus.textContent = stopped ? "Upload stopped." : error.message;
@@ -517,12 +496,17 @@ function wireAdmin() {
     }
   });
   wireResourceActions();
-  wireCategoryUploads();
   document.querySelector("#publishAllPending").addEventListener("click", async () => {
     const pending = state.resources.filter((resource) => resource.status !== "published");
     await Promise.all(pending.map((resource) => api(`/api/resources/${resource.id}`, { method: "PATCH", body: { status: "published" } })));
     await adminPage();
   });
+}
+
+function refreshResourceReviewTable() {
+  const body = document.querySelector("#resourceReviewTable tbody");
+  if (!body) return;
+  body.innerHTML = state.resources.length ? state.resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No uploaded resources yet.</td></tr>`;
 }
 
 function wireResourceActions() {
@@ -540,42 +524,9 @@ function wireResourceActions() {
       await adminPage();
     });
   });
-}
-
-function wireCategoryUploads() {
-  document.querySelectorAll("[data-category-upload]").forEach((form) => {
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const input = form.querySelector("input[type='file']");
-      const files = [...input.files];
-      if (!files.length) return;
-      const categoryId = form.dataset.categoryUpload;
-      const totalSize = files.reduce((sum, file) => sum + file.size, 0);
-      const options = { autoCategorize: false, targetCategoryId: categoryId };
-      const button = form.querySelector("button");
-      button.disabled = true;
-      try {
-        let data;
-        if (totalSize > 4 * 1024 * 1024) {
-          data = await uploadChunked(files, options, () => {}, undefined);
-        } else {
-          const body = new FormData();
-          body.append("autoCategorize", "false");
-          body.append("targetCategoryId", categoryId);
-          files.forEach((file) => body.append("files", file, file.webkitRelativePath || file.name));
-          data = await api("/api/resources/upload", { method: "POST", body });
-        }
-        await loadLibrary();
-        document.querySelector("#categoryResourceSections").innerHTML = categoryResourceSections();
-        wireResourceActions();
-        wireCategoryUploads();
-        alert(`${data.resources.length} file(s) uploaded to this category for review.`);
-      } catch (error) {
-        alert(error.message);
-      } finally {
-        button.disabled = false;
-        input.value = "";
-      }
+  document.querySelectorAll("[data-preview]").forEach((button) => {
+    button.addEventListener("click", () => {
+      window.open(`/protected-file/${button.dataset.preview}`, "_blank", "noopener");
     });
   });
 }

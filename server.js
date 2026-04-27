@@ -5,6 +5,7 @@ import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import os from "node:os";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -62,6 +63,7 @@ const mimeTypes = {
 
 const allowedResourceExtensions = [".pdf", ".epub", ".png", ".jpg", ".jpeg", ".webp", ".gif"];
 const CHUNK_DIR = path.join(STORAGE_DIR, "chunks");
+const INLINE_FILE_LIMIT = 8 * 1024 * 1024;
 
 class JsonStore {
   constructor(dir) {
@@ -124,10 +126,11 @@ class MongoStore {
   }
 
   async init() {
-    const { MongoClient } = await import("mongodb");
+    const { MongoClient, GridFSBucket } = await import("mongodb");
     this.client = new MongoClient(this.uri);
     await this.client.connect();
     this.db = this.client.db(this.databaseName || "seminary_library");
+    this.bucket = new GridFSBucket(this.db, { bucketName: "resourceFiles" });
     await fs.mkdir(STORAGE_DIR, { recursive: true });
   }
 
@@ -157,6 +160,29 @@ class MongoStore {
 
   async filter(collection, predicate) {
     return (await this.all(collection)).filter(predicate);
+  }
+
+  async saveFile(name, buffer, metadata = {}) {
+    await this.collection("resourceFiles.files").deleteMany({ filename: name });
+    await new Promise((resolve, reject) => {
+      Readable.from([buffer])
+        .pipe(this.bucket.openUploadStream(name, { metadata }))
+        .on("error", reject)
+        .on("finish", resolve);
+    });
+  }
+
+  async readFile(name) {
+    const file = await this.collection("resourceFiles.files").findOne({ filename: name });
+    if (!file) return null;
+    const chunks = [];
+    await new Promise((resolve, reject) => {
+      this.bucket.openDownloadStreamByName(name)
+        .on("data", (chunk) => chunks.push(chunk))
+        .on("error", reject)
+        .on("end", resolve);
+    });
+    return Buffer.concat(chunks);
   }
 }
 
@@ -323,6 +349,9 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
     const category = autoCategorize ? (categories.find((item) => item.name === suggested) || selectedCategory) : selectedCategory;
     const storageName = `${crypto.randomUUID()}${extension}`;
     await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
+    if (typeof db.saveFile === "function") {
+      await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
+    }
     const title = path.basename(file.filename, extension).replace(/[_-]+/g, " ").trim();
     saved.push(await db.insert("resources", {
       title,
@@ -336,6 +365,7 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       status: "pending",
       uploadBatchId: batch.id,
       createdBy: user.id,
+      inlineContent: file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
       metadata: { size: file.content.length, contentType: file.contentType }
     }));
   }
@@ -343,7 +373,7 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
 }
 
 function safeChunkName(value) {
-  return String(value || "").replace(/[^a-zA-Z0-9._-]/g, "_");
+  return String(value ?? "").replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
 function isStaff(user) {
@@ -687,15 +717,19 @@ async function serveResource(req, res, url) {
   const resource = await db.findOne("resources", (item) => item.id === url.pathname.split("/").pop() && (item.status === "published" || isStaff(user)));
   if (!resource) return send(res, 404, "Not found");
   const filePath = path.join(STORAGE_DIR, resource.storageName);
-  if (!existsSync(filePath)) return send(res, 404, "Missing file");
   const extension = path.extname(resource.storageName);
+  let stored = null;
+  if (!existsSync(filePath) && typeof db.readFile === "function") stored = await db.readFile(resource.storageName);
+  if (!existsSync(filePath) && !stored && !resource.inlineContent) return send(res, 404, "Missing file. Please upload this resource again after permanent storage is configured.");
   res.writeHead(200, {
     "Content-Type": mimeTypes[extension] || "application/octet-stream",
     "Content-Disposition": `inline; filename="${resource.title.replace(/"/g, "")}${extension}"`,
     "Cache-Control": "private, no-store",
     "X-Content-Type-Options": "nosniff"
   });
-  createReadStream(filePath).pipe(res);
+  if (existsSync(filePath)) return createReadStream(filePath).pipe(res);
+  if (stored) return res.end(stored);
+  if (resource.inlineContent) return res.end(Buffer.from(resource.inlineContent, "base64"));
 }
 
 async function serveStatic(req, res, url) {
