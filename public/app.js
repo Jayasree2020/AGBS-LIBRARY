@@ -4,7 +4,8 @@ const state = {
   categories: [],
   resources: [],
   reports: null,
-  readingSessionId: null
+  readingSessionId: null,
+  activeUpload: null
 };
 
 const app = document.querySelector("#app");
@@ -20,8 +21,9 @@ async function api(path, options = {}) {
   return data;
 }
 
-async function uploadChunked(files, options, onProgress) {
+async function uploadChunked(files, options, onProgress, signal) {
   const uploadId = crypto.randomUUID();
+  state.activeUpload = { uploadId, controller: signal ? null : state.activeUpload?.controller };
   const chunkSize = 1024 * 1024;
   const metadata = files.map((file, fileIndex) => ({
     fileIndex,
@@ -32,9 +34,11 @@ async function uploadChunked(files, options, onProgress) {
   const totalChunks = metadata.reduce((sum, file) => sum + file.totalChunks, 0);
   let sentChunks = 0;
   for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+    if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
     const file = files[fileIndex];
     onProgress(`Starting ${metadata[fileIndex].filename}`);
     for (let chunkIndex = 0; chunkIndex < metadata[fileIndex].totalChunks; chunkIndex++) {
+      if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
       const start = chunkIndex * chunkSize;
       const chunk = file.slice(start, start + chunkSize);
       const form = new FormData();
@@ -42,13 +46,13 @@ async function uploadChunked(files, options, onProgress) {
       form.append("fileIndex", String(fileIndex));
       form.append("chunkIndex", String(chunkIndex));
       form.append("chunk", chunk, `${fileIndex}-${chunkIndex}.part`);
-      await api("/api/resources/upload-chunk", { method: "POST", body: form });
+      await api("/api/resources/upload-chunk", { method: "POST", body: form, signal });
       sentChunks++;
-      onProgress(`Uploading ${metadata[fileIndex].filename}: part ${chunkIndex + 1} of ${metadata[fileIndex].totalChunks}. Total ${sentChunks} of ${totalChunks} parts.`);
+      onProgress(`Uploading ${metadata[fileIndex].filename}: ${chunkIndex + 1} of ${metadata[fileIndex].totalChunks} steps. Total ${sentChunks} of ${totalChunks}.`);
     }
-    onProgress(`Finished sending ${metadata[fileIndex].filename}`);
+    onProgress(`Finished ${metadata[fileIndex].filename}`);
   }
-  onProgress("Processing uploaded files...");
+  onProgress("Processing uploaded PDFs/files into the selected folders...");
   return api("/api/resources/upload-complete", {
     method: "POST",
     body: {
@@ -56,7 +60,8 @@ async function uploadChunked(files, options, onProgress) {
       files: metadata,
       autoCategorize: options.autoCategorize,
       targetCategoryId: options.targetCategoryId
-    }
+    },
+    signal
   });
 }
 
@@ -293,7 +298,7 @@ async function adminPage() {
     <main class="page">
       <h1>Admin Dashboard</h1>
       <p class="subtle">Upload resources, publish books, manage categories, and review student history.</p>
-      <section class="grid">
+      <section class="admin-panels">
         <div class="panel">
           <h2>Upload books</h2>
           <form class="form" id="uploadForm">
@@ -310,7 +315,10 @@ async function adminPage() {
                 ${state.categories.map((category) => `<option value="${category.id}">${escapeHtml(category.name)}</option>`).join("")}
               </select>
             </label>
-            <button>Upload for review</button>
+            <div class="button-row">
+              <button type="submit" id="uploadSubmit">Upload for review</button>
+              <button type="button" class="danger" id="stopUpload" disabled>Stop upload</button>
+            </div>
             <p class="subtle" id="uploadSelection">No files selected.</p>
             <p class="subtle" id="uploadStatus"></p>
             <div class="upload-log" id="uploadLog"></div>
@@ -336,16 +344,40 @@ async function adminPage() {
           </form>
         </div>
       </section>
-      <h2>Resources awaiting/admin review</h2>
-      <table class="table">
-        <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Action</th></tr></thead>
-        <tbody>${state.resources.map(adminResourceRow).join("")}</tbody>
-      </table>
+      <div class="section-heading">
+        <h2>Resources awaiting/admin review</h2>
+        <button id="publishAllPending">Publish all pending</button>
+      </div>
+      <div id="categoryResourceSections">${categoryResourceSections()}</div>
       <h2>Student history</h2>
       ${reportTable()}
     </main>
   `);
   wireAdmin();
+}
+
+function categoryResourceSections() {
+  return state.categories.map((category) => {
+    const resources = state.resources.filter((resource) => resource.categoryId === category.id);
+    return `
+      <section class="category-section">
+        <div class="category-section-head">
+          <div>
+            <h3>${escapeHtml(category.name)}</h3>
+            <div class="subtle">${resources.length} resource(s)</div>
+          </div>
+          <form class="category-upload" data-category-upload="${category.id}">
+            <input type="file" webkitdirectory directory multiple aria-label="Upload folder to ${escapeAttr(category.name)}">
+            <button type="submit" class="secondary">Upload folder</button>
+          </form>
+        </div>
+        <table class="table">
+          <thead><tr><th>Title</th><th>Category</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody>${resources.length ? resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No resources in this category yet.</td></tr>`}</tbody>
+        </table>
+      </section>
+    `;
+  }).join("");
 }
 
 function adminResourceRow(resource) {
@@ -380,7 +412,9 @@ function wireAdmin() {
   const uploadSelection = document.querySelector("#uploadSelection");
   const uploadStatus = document.querySelector("#uploadStatus");
   const uploadLog = document.querySelector("#uploadLog");
-  const uploadButton = document.querySelector("#uploadForm button[type='submit'], #uploadForm button:not([type])");
+  const uploadButton = document.querySelector("#uploadSubmit");
+  const stopUploadButton = document.querySelector("#stopUpload");
+  let uploadController = null;
   const addUploadLog = (message) => {
     const line = document.createElement("div");
     line.textContent = message;
@@ -397,6 +431,20 @@ function wireAdmin() {
   };
   resourceInput.addEventListener("change", updateUploadSelection);
   folderInput.addEventListener("change", updateUploadSelection);
+  stopUploadButton.addEventListener("click", async () => {
+    if (!uploadController) return;
+    stopUploadButton.disabled = true;
+    uploadController.abort();
+    uploadStatus.textContent = "Stopping upload...";
+    addUploadLog("Upload stop requested.");
+    if (state.activeUpload?.uploadId) {
+      try {
+        await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId: state.activeUpload.uploadId } });
+      } catch {
+        addUploadLog("Temporary upload cleanup will finish automatically.");
+      }
+    }
+  });
   document.querySelector("#uploadForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const files = selectedUploadFiles();
@@ -410,7 +458,9 @@ function wireAdmin() {
       targetCategoryId: document.querySelector("#targetCategoryId").value
     };
     try {
+      uploadController = new AbortController();
       uploadButton.disabled = true;
+      stopUploadButton.disabled = false;
       uploadLog.innerHTML = "";
       uploadStatus.textContent = "Uploading...";
       let data;
@@ -418,7 +468,7 @@ function wireAdmin() {
         data = await uploadChunked(files, options, (message) => {
           uploadStatus.textContent = message;
           addUploadLog(message);
-        });
+        }, uploadController.signal);
       } else {
         const form = new FormData();
         form.append("autoCategorize", String(options.autoCategorize));
@@ -427,18 +477,24 @@ function wireAdmin() {
           form.append("files", file, file.webkitRelativePath || file.name);
         }
         files.forEach((file) => addUploadLog(`Uploading ${file.webkitRelativePath || file.name}`));
-        data = await api("/api/resources/upload", { method: "POST", body: form });
+        data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal });
       }
       uploadStatus.textContent = `${data.resources.length} file(s) uploaded for review.`;
       data.resources.forEach((resource) => addUploadLog(`Ready for review: ${resource.title}`));
       await loadLibrary();
       state.reports = await api("/api/reports");
-      document.querySelector("tbody").innerHTML = state.resources.map(adminResourceRow).join("");
+      document.querySelector("#categoryResourceSections").innerHTML = categoryResourceSections();
+      wireResourceActions();
+      wireCategoryUploads();
     } catch (error) {
-      uploadStatus.textContent = error.message;
-      addUploadLog(`Error: ${error.message}`);
+      const stopped = error.name === "AbortError";
+      uploadStatus.textContent = stopped ? "Upload stopped." : error.message;
+      addUploadLog(stopped ? "Upload stopped before publishing for review." : `Error: ${error.message}`);
     } finally {
       uploadButton.disabled = false;
+      stopUploadButton.disabled = true;
+      uploadController = null;
+      state.activeUpload = null;
     }
   });
   document.querySelector("#userForm").addEventListener("submit", async (event) => {
@@ -460,6 +516,16 @@ function wireAdmin() {
       document.querySelector("#categoryStatus").textContent = error.message;
     }
   });
+  wireResourceActions();
+  wireCategoryUploads();
+  document.querySelector("#publishAllPending").addEventListener("click", async () => {
+    const pending = state.resources.filter((resource) => resource.status !== "published");
+    await Promise.all(pending.map((resource) => api(`/api/resources/${resource.id}`, { method: "PATCH", body: { status: "published" } })));
+    await adminPage();
+  });
+}
+
+function wireResourceActions() {
   document.querySelectorAll("[data-publish], [data-save]").forEach((button) => {
     button.addEventListener("click", async () => {
       const id = button.dataset.publish || button.dataset.save;
@@ -472,6 +538,44 @@ function wireAdmin() {
         }
       });
       await adminPage();
+    });
+  });
+}
+
+function wireCategoryUploads() {
+  document.querySelectorAll("[data-category-upload]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const input = form.querySelector("input[type='file']");
+      const files = [...input.files];
+      if (!files.length) return;
+      const categoryId = form.dataset.categoryUpload;
+      const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+      const options = { autoCategorize: false, targetCategoryId: categoryId };
+      const button = form.querySelector("button");
+      button.disabled = true;
+      try {
+        let data;
+        if (totalSize > 4 * 1024 * 1024) {
+          data = await uploadChunked(files, options, () => {}, undefined);
+        } else {
+          const body = new FormData();
+          body.append("autoCategorize", "false");
+          body.append("targetCategoryId", categoryId);
+          files.forEach((file) => body.append("files", file, file.webkitRelativePath || file.name));
+          data = await api("/api/resources/upload", { method: "POST", body });
+        }
+        await loadLibrary();
+        document.querySelector("#categoryResourceSections").innerHTML = categoryResourceSections();
+        wireResourceActions();
+        wireCategoryUploads();
+        alert(`${data.resources.length} file(s) uploaded to this category for review.`);
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        button.disabled = false;
+        input.value = "";
+      }
     });
   });
 }

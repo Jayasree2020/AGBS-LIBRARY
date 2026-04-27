@@ -159,6 +159,18 @@ label {
   gap: 14px;
 }
 
+.admin-panels {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.25fr) minmax(260px, 0.75fr);
+  gap: 14px;
+  align-items: start;
+  margin: 18px 0 26px;
+}
+
+.admin-panels .panel:first-child {
+  grid-row: span 2;
+}
+
 .panel {
   padding: 18px;
 }
@@ -173,6 +185,44 @@ label {
 
 .toolbar.compact {
   margin: 0;
+}
+
+.button-row,
+.section-heading,
+.category-section-head,
+.category-upload {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.section-heading,
+.category-section-head {
+  justify-content: space-between;
+}
+
+.section-heading {
+  margin-top: 22px;
+}
+
+.section-heading h2,
+.category-section h3 {
+  margin: 0;
+}
+
+.category-section {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0 20px;
+}
+
+.category-upload {
+  justify-content: flex-end;
+}
+
+.category-upload input {
+  width: min(280px, 100%);
 }
 
 .searchbar {
@@ -292,6 +342,10 @@ label {
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .admin-panels {
+    grid-template-columns: 1fr;
   }
 
   .page {

@@ -532,6 +532,15 @@ async function routeApi(req, res, url) {
     return json(res, 200, { ok: true });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/resources/upload-cancel") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const body = await bodyJson(req);
+    const uploadId = safeChunkName(body.uploadId);
+    if (!uploadId) return json(res, 400, { error: "Missing upload id." });
+    await fs.rm(path.join(CHUNK_DIR, uploadId), { recursive: true, force: true });
+    return json(res, 200, { ok: true });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/resources/upload-complete") {
     if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
     const body = await bodyJson(req);
