@@ -151,7 +151,23 @@ Students do not see other students' records.
 
 ## Storage And Database
 
-The app can run with local JSON files for development, but production should use MongoDB.
+The app can run with local JSON files for development, but production should use durable storage.
+
+The preferred no-Mongo setup is Cloudflare R2:
+
+- Book files are stored as one object per PDF/EPUB/image under `books/`.
+- Small app records are stored as JSON objects under `data/`.
+- Large uploads may travel in temporary upload steps, but the final stored object is still one complete file.
+
+Required R2 environment variables:
+
+```text
+R2_ACCOUNT_ID
+R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY
+R2_BUCKET
+R2_PREFIX
+```
 
 MongoDB collections used by the app:
 
@@ -163,11 +179,11 @@ MongoDB collections used by the app:
 - `readingSessions`
 - `accessEvents`
 - `skippedUploads`
-- MongoDB GridFS collections for stored resource files when MongoDB is configured.
+- MongoDB GridFS collections for stored resource files only if MongoDB is configured instead of R2.
 
 Important production note:
 
-Vercel serverless file storage is temporary. For permanent uploaded books, configure durable storage. The current app supports MongoDB GridFS when `MONGODB_URI` is set. Without durable storage, old uploaded files may disappear after Vercel resets the server runtime.
+Vercel serverless file storage is temporary. For permanent uploaded books, configure durable storage. The current app supports Cloudflare R2 as the recommended no-Mongo storage option. Without R2 or another durable store, old uploaded files may disappear after Vercel resets the server runtime.
 
 ## Environment Variables
 
@@ -180,6 +196,11 @@ SESSION_SECRET
 BASE_URL
 MONGODB_URI
 MONGODB_DB
+R2_ACCOUNT_ID
+R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY
+R2_BUCKET
+R2_PREFIX
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 GOOGLE_REDIRECT_URI
@@ -203,12 +224,12 @@ Never place real values for these in GitHub or frontend files.
 
 - Browser-level screenshots and copying cannot be fully prevented.
 - EPUB reading is served through the protected route; deeper EPUB-specific page/location tracking may need a dedicated EPUB reader library later.
-- Permanent file reliability depends on MongoDB/GridFS or another durable storage service being configured.
+- Permanent file reliability depends on Cloudflare R2 or another durable storage service being configured.
 - Google sign-in works only after Google OAuth credentials are set correctly in Vercel.
 
 ## Suggested Next Work
 
-1. Configure MongoDB Atlas in Vercel using `MONGODB_URI`.
+1. Configure Cloudflare R2 in Vercel using the `R2_*` environment variables.
 2. Confirm uploaded files remain available after Vercel redeploys.
 3. Configure Google OAuth credentials for Gmail sign-in.
 4. Add better PDF/EPUB page-location tracking if required.

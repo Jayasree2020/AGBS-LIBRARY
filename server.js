@@ -27,6 +27,11 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${BASE_URL}/auth/google/callback`;
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
+const R2_BUCKET = process.env.R2_BUCKET || "";
+const R2_PREFIX = (process.env.R2_PREFIX || "agbs-library").replace(/^\/+|\/+$/g, "");
 const RUNTIME_DIR = process.env.VERCEL ? path.join(os.tmpdir(), "agbs-library") : __dirname;
 const DATA_DIR = path.join(RUNTIME_DIR, "data");
 const STORAGE_DIR = path.join(RUNTIME_DIR, "storage");
@@ -203,7 +208,146 @@ class MongoStore {
   }
 }
 
+class R2Store {
+  constructor({ accountId, accessKeyId, secretAccessKey, bucket, prefix }) {
+    this.bucket = bucket;
+    this.prefix = prefix;
+    this.collections = ["users", "categories", "resources", "uploadBatches", "loginSessions", "readingSessions", "accessEvents", "skippedUploads"];
+    this.endpoint = `https://${accountId}.r2.cloudflarestorage.com`;
+    this.credentials = { accessKeyId, secretAccessKey };
+  }
+
+  async init() {
+    const { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand } = await import("@aws-sdk/client-s3");
+    this.commands = { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand };
+    this.client = new S3Client({
+      region: "auto",
+      endpoint: this.endpoint,
+      credentials: this.credentials
+    });
+    await fs.mkdir(STORAGE_DIR, { recursive: true });
+    for (const collection of this.collections) {
+      const key = this.collectionKey(collection);
+      const exists = await this.exists(key);
+      if (!exists) await this.putJson(key, []);
+    }
+  }
+
+  key(value) {
+    return `${this.prefix}/${String(value || "").replace(/^\/+/, "")}`;
+  }
+
+  collectionKey(collection) {
+    return this.key(`data/${collection}.json`);
+  }
+
+  fileKey(name) {
+    return this.key(`books/${name}`);
+  }
+
+  async exists(key) {
+    try {
+      await this.client.send(new this.commands.HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async bodyToBuffer(body) {
+    const chunks = [];
+    for await (const chunk of body) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  }
+
+  async putJson(key, value) {
+    await this.client.send(new this.commands.PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      Body: JSON.stringify(value, null, 2),
+      ContentType: "application/json; charset=utf-8"
+    }));
+  }
+
+  async getJson(key) {
+    const response = await this.client.send(new this.commands.GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    return JSON.parse((await this.bodyToBuffer(response.Body)).toString("utf8"));
+  }
+
+  async all(collection) {
+    return await this.getJson(this.collectionKey(collection));
+  }
+
+  async write(collection, records) {
+    await this.putJson(this.collectionKey(collection), records);
+  }
+
+  async insert(collection, record) {
+    const records = await this.all(collection);
+    const now = new Date().toISOString();
+    const full = { id: crypto.randomUUID(), createdAt: now, updatedAt: now, ...record };
+    records.push(full);
+    await this.write(collection, records);
+    return full;
+  }
+
+  async update(collection, id, patch) {
+    const records = await this.all(collection);
+    const index = records.findIndex((item) => item.id === id);
+    if (index === -1) return null;
+    records[index] = { ...records[index], ...patch, updatedAt: new Date().toISOString() };
+    await this.write(collection, records);
+    return records[index];
+  }
+
+  async delete(collection, id) {
+    const records = await this.all(collection);
+    const next = records.filter((item) => item.id !== id);
+    await this.write(collection, next);
+    return next.length !== records.length;
+  }
+
+  async findOne(collection, predicate) {
+    return (await this.all(collection)).find(predicate) || null;
+  }
+
+  async filter(collection, predicate) {
+    return (await this.all(collection)).filter(predicate);
+  }
+
+  async saveFile(name, buffer, metadata = {}) {
+    const extension = path.extname(name).toLowerCase();
+    await this.client.send(new this.commands.PutObjectCommand({
+      Bucket: this.bucket,
+      Key: this.fileKey(name),
+      Body: buffer,
+      ContentType: metadata.contentType || mimeTypes[extension] || "application/octet-stream",
+      Metadata: {
+        originalFilename: String(metadata.originalFilename || "").slice(0, 1024)
+      }
+    }));
+  }
+
+  async readFile(name) {
+    const response = await this.client.send(new this.commands.GetObjectCommand({ Bucket: this.bucket, Key: this.fileKey(name) }));
+    return await this.bodyToBuffer(response.Body);
+  }
+
+  async deleteFile(name) {
+    await this.client.send(new this.commands.DeleteObjectCommand({ Bucket: this.bucket, Key: this.fileKey(name) }));
+  }
+}
+
 async function createStore() {
+  if (R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET) {
+    return new R2Store({
+      accountId: R2_ACCOUNT_ID,
+      accessKeyId: R2_ACCESS_KEY_ID,
+      secretAccessKey: R2_SECRET_ACCESS_KEY,
+      bucket: R2_BUCKET,
+      prefix: R2_PREFIX
+    });
+  }
   if (process.env.MONGODB_URI) return new MongoStore(process.env.MONGODB_URI, process.env.MONGODB_DB);
   return new JsonStore(DATA_DIR);
 }
@@ -536,6 +680,7 @@ async function routeApi(req, res, url) {
     return json(res, 200, {
       googleConfigured: Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
       mongoConfigured: Boolean(process.env.MONGODB_URI),
+      r2Configured: Boolean(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET),
       adminEmail: ADMIN_EMAIL
     });
   }
