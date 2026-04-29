@@ -359,6 +359,12 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
   return `${salt}:${hash}`;
 }
 
+function generateTemporaryPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = crypto.randomBytes(10);
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+}
+
 function verifyPassword(password, saved) {
   if (!password || !saved || !saved.includes(":")) return false;
   const [salt, hash] = saved.split(":");
@@ -903,16 +909,49 @@ async function routeApi(req, res, url) {
     if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
     const body = await bodyJson(req);
     const email = String(body.email || "").toLowerCase();
-    if (!email || !body.password) return json(res, 400, { error: "Email and password are required." });
+    if (!email) return json(res, 400, { error: "Email is required." });
+    const existing = await db.findOne("users", (item) => item.email === email);
+    if (existing && existing.active !== false) return json(res, 409, { error: "This email already exists." });
+    const temporaryPassword = generateTemporaryPassword();
+    const role = ["student", "admin", "director"].includes(body.role) ? body.role : "student";
+    if (existing) {
+      const updated = await db.update("users", existing.id, {
+        name: body.name || email,
+        role,
+        passwordHash: hashPassword(temporaryPassword),
+        provider: "password",
+        active: true,
+        removedAt: null,
+        removedBy: null,
+        temporaryPasswordSetAt: new Date().toISOString()
+      });
+      return json(res, 200, { user: publicUser(updated), temporaryPassword });
+    }
     const created = await db.insert("users", {
       email,
       name: body.name || email,
-      role: ["student", "admin", "director"].includes(body.role) ? body.role : "student",
-      passwordHash: hashPassword(body.password),
+      role,
+      passwordHash: hashPassword(temporaryPassword),
       provider: "password",
-      active: true
+      active: true,
+      createdBy: user.id,
+      temporaryPasswordSetAt: new Date().toISOString()
     });
-    return json(res, 201, { user: publicUser(created) });
+    return json(res, 201, { user: publicUser(created), temporaryPassword });
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/users/")) {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const id = url.pathname.split("/").pop();
+    if (id === user.id || id === "bootstrap-admin") return json(res, 400, { error: "You cannot remove your own admin access here." });
+    const target = await db.findOne("users", (item) => item.id === id);
+    if (!target) return json(res, 404, { error: "User not found." });
+    await db.update("users", id, {
+      active: false,
+      removedAt: new Date().toISOString(),
+      removedBy: user.id
+    });
+    return json(res, 200, { ok: true });
   }
 
   if (req.method === "GET" && url.pathname === "/api/reports") {

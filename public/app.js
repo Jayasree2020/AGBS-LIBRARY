@@ -416,14 +416,17 @@ async function adminPage() {
           </form>
         </div>
         <div class="panel">
-          <h2>Add student/user</h2>
+          <h2>Add student</h2>
           <form class="form" id="userForm">
             <label>Name <input name="name" required></label>
             <label>Email <input name="email" type="email" required></label>
-            <label>Role <select name="role"><option>student</option><option>admin</option><option>director</option></select></label>
-            <label>Temporary password <input name="password" type="password" minlength="10" required></label>
-            <button>Create user</button>
+            <input name="role" type="hidden" value="student">
+            <button>Create student login</button>
             <p class="subtle" id="userStatus"></p>
+            <div class="temp-password" id="tempPasswordBox" hidden>
+              <span>Temporary password</span>
+              <strong id="tempPasswordValue"></strong>
+            </div>
           </form>
         </div>
         <div class="panel">
@@ -446,6 +449,8 @@ async function adminPage() {
       </table>
       <h2>Skipped duplicate uploads</h2>
       <div id="skippedUploadsWrap">${skippedUploadsTable()}</div>
+      <h2>Student accounts</h2>
+      <div id="studentAccountsWrap">${studentAccountsTable()}</div>
       <h2>Student history</h2>
       ${reportTable()}
     </main>
@@ -506,6 +511,26 @@ function skippedUploadsTable() {
     <table class="table">
       <thead><tr><th>File</th><th>Reason</th><th>Size</th><th>Skipped at</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="4">No skipped duplicate uploads yet.</td></tr>`}</tbody>
+    </table>
+  `;
+}
+
+function studentAccountsTable() {
+  const reports = state.reports || { users: [] };
+  const users = (Array.isArray(reports.users) ? reports.users : []).filter((user) => user.role === "student");
+  const rows = users.map((user) => `
+    <tr>
+      <td>${escapeHtml(user.name || user.email)}</td>
+      <td>${escapeHtml(user.email)}</td>
+      <td><span class="badge ${user.active === false ? "pending" : "published"}">${user.active === false ? "removed" : "active"}</span></td>
+      <td>${user.removedAt ? escapeHtml(new Date(user.removedAt).toLocaleString()) : ""}</td>
+      <td>${user.active === false ? "" : `<button class="danger" data-remove-user="${user.id}">Remove access</button>`}</td>
+    </tr>
+  `).join("");
+  return `
+    <table class="table">
+      <thead><tr><th>Student</th><th>Email</th><th>Status</th><th>Removed at</th><th>Action</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5">No student accounts yet.</td></tr>`}</tbody>
     </table>
   `;
 }
@@ -621,8 +646,14 @@ function wireAdmin() {
   document.querySelector("#userForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      await api("/api/users", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget)) });
-      document.querySelector("#userStatus").textContent = "User created.";
+      const result = await api("/api/users", { method: "POST", body: Object.fromEntries(new FormData(event.currentTarget)) });
+      document.querySelector("#userStatus").textContent = "Student login created. Give this temporary password to the student.";
+      document.querySelector("#tempPasswordValue").textContent = result.temporaryPassword;
+      document.querySelector("#tempPasswordBox").hidden = false;
+      event.currentTarget.reset();
+      state.reports = await api("/api/reports");
+      refreshStudentAccountsTable();
+      wireStudentActions();
     } catch (error) {
       document.querySelector("#userStatus").textContent = error.message;
     }
@@ -638,6 +669,7 @@ function wireAdmin() {
     }
   });
   wireResourceActions();
+  wireStudentActions();
 }
 
 function refreshResourceReviewTable() {
@@ -657,9 +689,25 @@ function refreshSkippedUploadsTable() {
   if (wrap) wrap.innerHTML = skippedUploadsTable();
 }
 
+function refreshStudentAccountsTable() {
+  const wrap = document.querySelector("#studentAccountsWrap");
+  if (wrap) wrap.innerHTML = studentAccountsTable();
+}
+
 function refreshBookCountSummary() {
   const wrap = document.querySelector("#bookCountSummary");
   if (wrap) wrap.innerHTML = bookCountSummary();
+}
+
+function wireStudentActions() {
+  document.querySelectorAll("[data-remove-user]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!confirm("Remove this student's access?")) return;
+      await api(`/api/users/${button.dataset.removeUser}`, { method: "DELETE" });
+      state.reports = await api("/api/reports");
+      refreshStudentAccountsTable();
+    });
+  });
 }
 
 function wireResourceActions() {

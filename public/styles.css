@@ -277,6 +277,26 @@ label {
   border-bottom: 0;
 }
 
+.temp-password {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #9fcac4;
+  border-radius: 8px;
+  background: #eef8f6;
+}
+
+.temp-password span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.temp-password strong {
+  color: var(--brand-strong);
+  font-size: 20px;
+  letter-spacing: 1px;
+}
+
 .card {
   padding: 16px;
   display: grid;
