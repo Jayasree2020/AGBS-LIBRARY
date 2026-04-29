@@ -315,11 +315,35 @@ label {
 
 .reader-bar {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: 10px;
+  padding: 8px 12px;
   background: #fff;
   border-bottom: 1px solid var(--line);
+}
+
+.reader-bar-pdf {
+  flex-wrap: wrap;
+}
+
+.reader-title {
+  min-width: 180px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reader-title strong {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-title .subtle {
+  font-size: 12px;
 }
 
 .reader iframe {
@@ -332,25 +356,28 @@ label {
 .pdf-viewer {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: 1fr;
   background: #edf1f4;
 }
 
-.pdf-toolbar {
+.pdf-controls {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
-  padding: 10px;
-  background: #fff;
-  border-bottom: 1px solid var(--line);
+  flex: 1 1 380px;
 }
 
-.pdf-toolbar span {
+.pdf-controls button {
+  padding: 7px 10px;
+}
+
+.pdf-controls span {
   color: var(--muted);
-  min-width: 120px;
+  min-width: 110px;
   text-align: center;
+  font-size: 13px;
 }
 
 .pdf-stage {
@@ -393,5 +420,17 @@ label {
 
   .page {
     padding: 20px 14px;
+  }
+
+  .reader-title {
+    min-width: 100%;
+  }
+
+  .reader-title strong {
+    max-width: 100%;
+  }
+
+  .pdf-controls {
+    justify-content: flex-start;
   }
 }

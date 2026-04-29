@@ -274,8 +274,9 @@ async function readPage() {
   window.addEventListener("beforeunload", endReading);
   layout(`
     <main class="reader">
-      <div class="reader-bar">
-        <div><strong>${escapeHtml(resource.title)}</strong><div class="subtle">Reading time is being recorded.</div></div>
+      <div class="reader-bar ${resource.format === "pdf" ? "reader-bar-pdf" : ""}">
+        <div class="reader-title"><strong>${escapeHtml(resource.title)}</strong><span class="subtle">Reading time is recorded.</span></div>
+        ${resource.format === "pdf" ? pdfControls() : ""}
         <button class="secondary" id="backLibrary">Back to library</button>
       </div>
       ${readerSurface(resource)}
@@ -288,17 +289,22 @@ async function readPage() {
   if (resource.format === "pdf") await setupPdfViewer(resource.id);
 }
 
+function pdfControls() {
+  return `
+    <div class="pdf-controls">
+      <button class="secondary" id="pdfPrev">Previous</button>
+      <span id="pdfPageStatus">Loading...</span>
+      <button class="secondary" id="pdfNext">Next</button>
+      <button class="secondary" id="pdfZoomOut">Zoom out</button>
+      <button class="secondary" id="pdfZoomIn">Zoom in</button>
+    </div>
+  `;
+}
+
 function readerSurface(resource) {
   if (resource.format === "pdf") {
     return `
       <section class="pdf-viewer" id="pdfViewer">
-        <div class="pdf-toolbar">
-          <button class="secondary" id="pdfPrev">Previous</button>
-          <span id="pdfPageStatus">Loading...</span>
-          <button class="secondary" id="pdfNext">Next</button>
-          <button class="secondary" id="pdfZoomOut">Zoom out</button>
-          <button class="secondary" id="pdfZoomIn">Zoom in</button>
-        </div>
         <div class="pdf-stage">
           <canvas id="pdfCanvas" aria-label="PDF page"></canvas>
         </div>
