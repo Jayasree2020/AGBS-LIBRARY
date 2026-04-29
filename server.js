@@ -534,7 +534,7 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       originalFilename: file.filename,
       storageName,
       categoryId: category?.id || "",
-      suggestedCategory: suggested,
+      suggestedCategory: suggested || category?.name || "",
       uploadMode: autoCategorize ? "auto" : "category",
       status: "published",
       uploadBatchId: batch.id,
@@ -638,7 +638,7 @@ function categorySuggestion(name) {
     ["Social Analysis", ["social", "society", "analysis", "politic", "econom", "caste", "culture", "development"]],
     ["Women Studies", ["women", "woman", "gender", "feminist", "feminism", "womanist"]]
   ];
-  return rules.find(([, words]) => words.some((word) => lower.includes(word)))?.[0] || "Christian Theology";
+  return rules.find(([, words]) => words.some((word) => lower.includes(word)))?.[0] || "";
 }
 
 function fieldValue(parts, name, fallback = "") {
