@@ -539,7 +539,7 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       status: "published",
       uploadBatchId: batch.id,
       createdBy: user.id,
-      inlineContent: file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
+      inlineContent: shouldInlineFiles() && file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
       metadata: { size: file.content.length, contentType: file.contentType, hash }
     }));
     seenHashes.add(hash);
@@ -602,7 +602,7 @@ async function replaceResourceFile(resource, file, user) {
     storageName,
     status: "published",
     updatedBy: user.id,
-    inlineContent: file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
+    inlineContent: shouldInlineFiles() && file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
     metadata: { size: file.content.length, contentType: file.contentType, hash }
   });
 }
@@ -615,6 +615,16 @@ async function removeStoredFile(storageName) {
 
 function isStaff(user) {
   return user && ["admin", "director"].includes(user.role);
+}
+
+function shouldInlineFiles() {
+  return typeof db.saveFile !== "function";
+}
+
+function publicResource(resource) {
+  if (!resource) return null;
+  const { inlineContent, ...safe } = resource;
+  return safe;
 }
 
 function publicUser(user) {
@@ -664,6 +674,12 @@ async function seed() {
   const admin = await db.findOne("users", (user) => user.email === ADMIN_EMAIL);
   if (!admin) {
     await db.insert("users", { email: ADMIN_EMAIL, name: "Library Administrator", role: "admin", passwordHash: "", provider: "seed", active: true });
+  }
+  if (!shouldInlineFiles()) {
+    const resources = await db.all("resources");
+    for (const resource of resources) {
+      if (resource.inlineContent) await db.update("resources", resource.id, { inlineContent: undefined });
+    }
   }
 }
 
@@ -765,7 +781,7 @@ async function routeApi(req, res, url) {
       if (query && !`${item.title} ${item.author || ""}`.toLowerCase().includes(query)) return false;
       return true;
     });
-    return json(res, 200, { resources });
+    return json(res, 200, { resources: resources.map(publicResource) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/resources/upload") {
@@ -782,7 +798,7 @@ async function routeApi(req, res, url) {
     const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: files.length, status: "processed" });
     const { saved, skipped } = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
     if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
-    return json(res, 201, { resources: saved, skipped });
+    return json(res, 201, { resources: saved.map(publicResource), skipped });
   }
 
   if (req.method === "POST" && url.pathname === "/api/resources/upload-chunk") {
@@ -840,7 +856,7 @@ async function routeApi(req, res, url) {
     const { saved, skipped } = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
     await fs.rm(path.join(CHUNK_DIR, uploadId), { recursive: true, force: true });
     if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
-    return json(res, 201, { resources: saved, skipped });
+    return json(res, 201, { resources: saved.map(publicResource), skipped });
   }
 
   if (req.method === "GET" && url.pathname === "/api/skipped-uploads") {
@@ -855,7 +871,7 @@ async function routeApi(req, res, url) {
     const body = await bodyJson(req);
     const patch = {};
     for (const key of ["title", "author", "categoryId", "status"]) if (body[key] !== undefined) patch[key] = body[key];
-    return json(res, 200, { resource: await db.update("resources", id, patch) });
+    return json(res, 200, { resource: publicResource(await db.update("resources", id, patch)) });
   }
 
   if (req.method === "POST" && url.pathname.match(/^\/api\/resources\/[^/]+\/replace$/)) {
@@ -867,7 +883,7 @@ async function routeApi(req, res, url) {
     const file = parts.find((part) => part.filename);
     if (!file) return json(res, 400, { error: "Choose a replacement file." });
     try {
-      return json(res, 200, { resource: await replaceResourceFile(resource, file, user) });
+      return json(res, 200, { resource: publicResource(await replaceResourceFile(resource, file, user)) });
     } catch (error) {
       return json(res, 400, { error: error.message });
     }
@@ -905,7 +921,7 @@ async function routeApi(req, res, url) {
     const logins = await db.all("loginSessions");
     const reads = await db.all("readingSessions");
     const resources = await db.all("resources");
-    return json(res, 200, { users: users.map(publicUser), logins, reads, resources });
+    return json(res, 200, { users: users.map(publicUser), logins, reads, resources: resources.map(publicResource) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/reading/start") {

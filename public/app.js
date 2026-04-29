@@ -183,8 +183,8 @@ function loginPage() {
 
 async function loadLibrary() {
   const [categories, resources] = await Promise.all([api("/api/categories"), api("/api/resources")]);
-  state.categories = categories.categories;
-  state.resources = resources.resources;
+  state.categories = Array.isArray(categories.categories) ? categories.categories : [];
+  state.resources = Array.isArray(resources.resources) ? resources.resources : [];
 }
 
 async function libraryPage() {
@@ -192,10 +192,12 @@ async function libraryPage() {
   const params = new URLSearchParams(window.location.search);
   const categorySlug = params.get("category") || (route().startsWith("/library/") ? decodeURIComponent(route().split("/").pop()) : "");
   const searchText = params.get("q") || "";
-  const currentCategory = state.categories.find((item) => item.slug === categorySlug || item.id === categorySlug);
+  const categories = Array.isArray(state.categories) ? state.categories : [];
+  const allResources = Array.isArray(state.resources) ? state.resources : [];
+  const currentCategory = categories.find((item) => item.slug === categorySlug || item.id === categorySlug);
   const terms = searchText.toLowerCase().split(/\s+/).filter(Boolean);
-  const resources = state.resources.filter((resource) => {
-    const category = state.categories.find((item) => item.id === resource.categoryId);
+  const resources = allResources.filter((resource) => {
+    const category = categories.find((item) => item.id === resource.categoryId);
     const haystack = `${resource.title || ""} ${resource.author || ""} ${resource.format || ""} ${resource.originalFilename || ""} ${category?.name || ""}`.toLowerCase();
     const categoryMatches = !currentCategory || resource.categoryId === currentCategory.id;
     const textMatches = !terms.length || terms.some((term) => haystack.includes(term));
@@ -210,7 +212,7 @@ async function libraryPage() {
         <label>Category
           <select id="libraryCategoryInput" name="category">
             <option value="">All categories</option>
-            ${state.categories.map((category) => `<option value="${category.slug}" ${currentCategory?.id === category.id ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("")}
+            ${categories.map((category) => `<option value="${category.slug}" ${currentCategory?.id === category.id ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("")}
           </select>
         </label>
         <button>Search</button>
@@ -218,7 +220,7 @@ async function libraryPage() {
       </form>
       <div class="toolbar">
         <button class="secondary" data-link href="/library">All</button>
-        ${state.categories.map((category) => `<button class="secondary" data-link href="/library/${category.slug}">${category.name}</button>`).join("")}
+        ${categories.map((category) => `<button class="secondary" data-link href="/library/${category.slug}">${category.name}</button>`).join("")}
       </div>
       <table class="table library-table">
         <thead><tr><th>Title</th><th>Author</th><th>Category</th><th>Format</th><th>Action</th></tr></thead>
@@ -244,7 +246,7 @@ function wireLibrarySearch() {
 }
 
 function libraryResourceRow(resource) {
-  const category = state.categories.find((item) => item.id === resource.categoryId);
+  const category = (Array.isArray(state.categories) ? state.categories : []).find((item) => item.id === resource.categoryId);
   return `
     <tr>
       <td>${escapeHtml(resource.title)}</td>
@@ -265,7 +267,7 @@ function wireResourceButtons() {
 async function readPage() {
   await loadLibrary();
   const id = route().split("/").pop();
-  const resource = state.resources.find((item) => item.id === id);
+  const resource = (Array.isArray(state.resources) ? state.resources : []).find((item) => item.id === id);
   if (!resource) return layout(`<main class="page"><div class="notice">This resource is unavailable.</div></main>`);
   const session = await api("/api/reading/start", { method: "POST", body: { resourceId: id } });
   state.readingSessionId = session.readingSession.id;
@@ -296,8 +298,8 @@ async function adminPage() {
   if (!["admin", "director"].includes(state.user?.role)) return layout(`<main class="page"><div class="notice">Admin access required.</div></main>`);
   await loadLibrary();
   const [reports, skipped] = await Promise.all([api("/api/reports"), api("/api/skipped-uploads")]);
-  state.reports = reports;
-  state.skippedUploads = skipped.skipped;
+  state.reports = reports || { users: [], reads: [], logins: [], resources: [] };
+  state.skippedUploads = Array.isArray(skipped.skipped) ? skipped.skipped : [];
   layout(`
     <main class="page">
       <h1>Admin Dashboard</h1>
@@ -353,7 +355,7 @@ async function adminPage() {
       </div>
       <table class="table" id="resourceReviewTable">
         <thead><tr><th>Title</th><th>Category</th><th>Format</th><th>Action</th></tr></thead>
-        <tbody>${state.resources.length ? state.resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No uploaded resources yet.</td></tr>`}</tbody>
+        <tbody>${resourceRowsHtml()}</tbody>
       </table>
       <h2>Skipped duplicate uploads</h2>
       <div id="skippedUploadsWrap">${skippedUploadsTable()}</div>
@@ -399,12 +401,13 @@ function skippedUploadsTable() {
 }
 
 function reportTable() {
-  const users = state.reports.users.filter((user) => user.role === "student");
+  const reports = state.reports || { users: [], reads: [], logins: [] };
+  const users = (Array.isArray(reports.users) ? reports.users : []).filter((user) => user.role === "student");
   const rows = users.map((user) => {
-    const reads = state.reports.reads.filter((item) => item.userId === user.id);
+    const reads = (Array.isArray(reports.reads) ? reports.reads : []).filter((item) => item.userId === user.id);
     const seconds = reads.reduce((sum, item) => sum + Number(item.seconds || 0), 0);
     const books = new Set(reads.map((item) => item.resourceId)).size;
-    const logins = state.reports.logins.filter((item) => item.userId === user.id).length;
+    const logins = (Array.isArray(reports.logins) ? reports.logins : []).filter((item) => item.userId === user.id).length;
     return `<tr><td>${escapeHtml(user.name || user.email)}</td><td>${escapeHtml(user.email)}</td><td>${logins}</td><td>${books}</td><td>${(seconds / 3600).toFixed(2)}</td></tr>`;
   }).join("");
   return `<table class="table"><thead><tr><th>Student</th><th>Email</th><th>Logins</th><th>Books opened</th><th>Reading hours</th></tr></thead><tbody>${rows || `<tr><td colspan="5">No student activity yet.</td></tr>`}</tbody></table>`;
@@ -484,12 +487,13 @@ function wireAdmin() {
         data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal });
       }
       const skippedCount = data.skipped?.length || 0;
-      uploadStatus.textContent = `${data.resources.length} file(s) added to the library. ${skippedCount} skipped.`;
-      data.resources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
+      const addedResources = Array.isArray(data.resources) ? data.resources : [];
+      uploadStatus.textContent = `${addedResources.length} file(s) added to the library. ${skippedCount} skipped.`;
+      addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
       (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
       await loadLibrary();
       state.reports = await api("/api/reports");
-      state.skippedUploads = (await api("/api/skipped-uploads")).skipped;
+      state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
       refreshResourceReviewTable();
       refreshSkippedUploadsTable();
       wireResourceActions();
@@ -529,7 +533,12 @@ function wireAdmin() {
 function refreshResourceReviewTable() {
   const body = document.querySelector("#resourceReviewTable tbody");
   if (!body) return;
-  body.innerHTML = state.resources.length ? state.resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No uploaded resources yet.</td></tr>`;
+  body.innerHTML = resourceRowsHtml();
+}
+
+function resourceRowsHtml() {
+  const resources = Array.isArray(state.resources) ? state.resources : [];
+  return resources.length ? resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No uploaded resources yet.</td></tr>`;
 }
 
 function refreshSkippedUploadsTable() {
