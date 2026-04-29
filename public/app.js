@@ -278,13 +278,92 @@ async function readPage() {
         <div><strong>${escapeHtml(resource.title)}</strong><div class="subtle">Reading time is being recorded.</div></div>
         <button class="secondary" id="backLibrary">Back to library</button>
       </div>
-      <iframe src="/protected-file/${resource.id}" title="${escapeHtml(resource.title)}"></iframe>
+      ${readerSurface(resource)}
     </main>
   `);
   document.querySelector("#backLibrary").addEventListener("click", async () => {
     await endReading();
     go("/library");
   });
+  if (resource.format === "pdf") await setupPdfViewer(resource.id);
+}
+
+function readerSurface(resource) {
+  if (resource.format === "pdf") {
+    return `
+      <section class="pdf-viewer" id="pdfViewer">
+        <div class="pdf-toolbar">
+          <button class="secondary" id="pdfPrev">Previous</button>
+          <span id="pdfPageStatus">Loading...</span>
+          <button class="secondary" id="pdfNext">Next</button>
+          <button class="secondary" id="pdfZoomOut">Zoom out</button>
+          <button class="secondary" id="pdfZoomIn">Zoom in</button>
+        </div>
+        <div class="pdf-stage">
+          <canvas id="pdfCanvas" aria-label="PDF page"></canvas>
+        </div>
+      </section>
+    `;
+  }
+  return `<iframe src="/protected-file/${resource.id}" title="${escapeHtml(resource.title)}"></iframe>`;
+}
+
+async function setupPdfViewer(resourceId) {
+  const status = document.querySelector("#pdfPageStatus");
+  const canvas = document.querySelector("#pdfCanvas");
+  const context = canvas.getContext("2d");
+  const pdfjs = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+  const response = await fetch(`/protected-file/${resourceId}`, { cache: "no-store" });
+  if (!response.ok) throw new Error("Unable to open this PDF.");
+  const pdf = await pdfjs.getDocument({ data: await response.arrayBuffer() }).promise;
+  let pageNumber = 1;
+  let scale = 1.2;
+  let rendering = false;
+
+  const renderPage = async () => {
+    if (rendering) return;
+    rendering = true;
+    status.textContent = `Page ${pageNumber} of ${pdf.numPages}`;
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale });
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(viewport.width * ratio);
+    canvas.height = Math.floor(viewport.height * ratio);
+    canvas.style.width = `${Math.floor(viewport.width)}px`;
+    canvas.style.height = `${Math.floor(viewport.height)}px`;
+    await page.render({
+      canvasContext: context,
+      viewport,
+      transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null
+    }).promise;
+    document.querySelector("#pdfPrev").disabled = pageNumber <= 1;
+    document.querySelector("#pdfNext").disabled = pageNumber >= pdf.numPages;
+    rendering = false;
+  };
+
+  document.querySelector("#pdfPrev").addEventListener("click", async () => {
+    if (pageNumber > 1) {
+      pageNumber--;
+      await renderPage();
+    }
+  });
+  document.querySelector("#pdfNext").addEventListener("click", async () => {
+    if (pageNumber < pdf.numPages) {
+      pageNumber++;
+      await renderPage();
+    }
+  });
+  document.querySelector("#pdfZoomOut").addEventListener("click", async () => {
+    scale = Math.max(0.6, scale - 0.2);
+    await renderPage();
+  });
+  document.querySelector("#pdfZoomIn").addEventListener("click", async () => {
+    scale = Math.min(2.4, scale + 0.2);
+    await renderPage();
+  });
+  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+  await renderPage();
 }
 
 async function endReading() {
