@@ -180,6 +180,40 @@ label {
   padding: 18px;
 }
 
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin: 12px 0 24px;
+}
+
+.stat-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 58px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.stat-card span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.stat-card strong {
+  color: var(--brand-strong);
+  font-size: 24px;
+}
+
+.stat-total {
+  border-color: #9fcac4;
+  background: #eef8f6;
+}
+
 .toolbar {
   display: flex;
   gap: 10px;

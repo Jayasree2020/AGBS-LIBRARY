@@ -435,6 +435,8 @@ async function adminPage() {
           </form>
         </div>
       </section>
+      <h2>Book count</h2>
+      <div id="bookCountSummary">${bookCountSummary()}</div>
       <div class="section-heading">
         <h2>Library files</h2>
       </div>
@@ -449,6 +451,29 @@ async function adminPage() {
     </main>
   `);
   wireAdmin();
+}
+
+function bookCountSummary() {
+  const resources = Array.isArray(state.resources) ? state.resources : [];
+  const categories = Array.isArray(state.categories) ? state.categories : [];
+  const categoryCards = categories.map((category) => {
+    const count = resources.filter((resource) => resource.categoryId === category.id).length;
+    return `
+      <article class="stat-card">
+        <span>${escapeHtml(category.name)}</span>
+        <strong>${count}</strong>
+      </article>
+    `;
+  }).join("");
+  return `
+    <section class="stats-grid">
+      <article class="stat-card stat-total">
+        <span>Total books</span>
+        <strong>${resources.length}</strong>
+      </article>
+      ${categoryCards}
+    </section>
+  `;
 }
 
 function adminResourceRow(resource) {
@@ -619,6 +644,7 @@ function refreshResourceReviewTable() {
   const body = document.querySelector("#resourceReviewTable tbody");
   if (!body) return;
   body.innerHTML = resourceRowsHtml();
+  refreshBookCountSummary();
 }
 
 function resourceRowsHtml() {
@@ -629,6 +655,11 @@ function resourceRowsHtml() {
 function refreshSkippedUploadsTable() {
   const wrap = document.querySelector("#skippedUploadsWrap");
   if (wrap) wrap.innerHTML = skippedUploadsTable();
+}
+
+function refreshBookCountSummary() {
+  const wrap = document.querySelector("#bookCountSummary");
+  if (wrap) wrap.innerHTML = bookCountSummary();
 }
 
 function wireResourceActions() {
