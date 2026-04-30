@@ -218,17 +218,21 @@ async function libraryPage() {
   const allResources = Array.isArray(state.resources) ? state.resources : [];
   const currentCategory = categories.find((item) => item.slug === categorySlug || item.id === categorySlug);
   const terms = searchText.toLowerCase().split(/\s+/).filter(Boolean);
-  const resources = allResources.filter((resource) => {
+  const hasBrowseRequest = Boolean(currentCategory || terms.length);
+  const resources = hasBrowseRequest ? allResources.filter((resource) => {
     const category = categories.find((item) => item.id === resource.categoryId);
     const haystack = `${resource.title || ""} ${resource.author || ""} ${resource.format || ""} ${resource.originalFilename || ""} ${category?.name || ""}`.toLowerCase();
     const categoryMatches = !currentCategory || resource.categoryId === currentCategory.id;
     const textMatches = !terms.length || terms.some((term) => haystack.includes(term));
     return categoryMatches && textMatches;
-  });
+  }) : [];
+  const emptyMessage = hasBrowseRequest
+    ? "No matching books were found. Try another title, author, file word, or department."
+    : "Search a title, author, file word, or choose a department to see books.";
   layout(`
     <main class="page">
       <h1>${currentCategory ? currentCategory.name : "Library"}</h1>
-      <p class="subtle">Browse approved PDF and EPUB resources by department.</p>
+      <p class="subtle">Search or choose a department to list the books you want to read.</p>
       <form class="toolbar searchbar" id="librarySearchForm">
         <label>Search any word <input id="librarySearchInput" name="q" value="${escapeAttr(searchText)}" placeholder="Title, author, topic, department"></label>
         <label>Category
@@ -246,7 +250,7 @@ async function libraryPage() {
       </div>
       <table class="table library-table">
         <thead><tr><th>Title</th><th>Author</th><th>Category</th><th>Format</th><th>Action</th></tr></thead>
-        <tbody>${resources.length ? resources.map(libraryResourceRow).join("") : `<tr><td colspan="5">No resources are available here yet.</td></tr>`}</tbody>
+        <tbody>${resources.length ? resources.map(libraryResourceRow).join("") : `<tr><td colspan="5">${emptyMessage}</td></tr>`}</tbody>
       </table>
     </main>
   `);
