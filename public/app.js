@@ -22,48 +22,63 @@ async function api(path, options = {}) {
   return data;
 }
 
-async function uploadChunked(files, options, onProgress, signal) {
+async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgress, signal) {
   const uploadId = crypto.randomUUID();
-  state.activeUpload = { uploadId, controller: signal ? null : state.activeUpload?.controller };
+  state.activeUpload = { uploadId };
   const chunkSize = 1024 * 1024;
-  const metadata = files.map((file, fileIndex) => ({
-    fileIndex,
-    filename: file.webkitRelativePath || file.name,
+  const filename = file.webkitRelativePath || file.name;
+  const metadata = {
+    fileIndex: 0,
+    filename,
     contentType: file.type,
     totalChunks: Math.max(1, Math.ceil(file.size / chunkSize))
-  }));
-  const totalChunks = metadata.reduce((sum, file) => sum + file.totalChunks, 0);
-  let sentChunks = 0;
-  for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+  };
+  try {
     if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
-    const file = files[fileIndex];
-    onProgress(`Starting ${metadata[fileIndex].filename}`);
-    for (let chunkIndex = 0; chunkIndex < metadata[fileIndex].totalChunks; chunkIndex++) {
+    onProgress(`Starting ${fileIndex + 1} of ${totalFiles}: ${filename}`);
+    for (let chunkIndex = 0; chunkIndex < metadata.totalChunks; chunkIndex++) {
       if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
       const start = chunkIndex * chunkSize;
       const chunk = file.slice(start, start + chunkSize);
       const form = new FormData();
       form.append("uploadId", uploadId);
-      form.append("fileIndex", String(fileIndex));
+      form.append("fileIndex", "0");
       form.append("chunkIndex", String(chunkIndex));
-      form.append("chunk", chunk, `${fileIndex}-${chunkIndex}.part`);
+      form.append("chunk", chunk, `0-${chunkIndex}.part`);
       await api("/api/resources/upload-chunk", { method: "POST", body: form, signal });
-      sentChunks++;
-      onProgress(`Uploading ${metadata[fileIndex].filename}: ${chunkIndex + 1} of ${metadata[fileIndex].totalChunks} steps. Total ${sentChunks} of ${totalChunks}.`);
+      onProgress(`Uploading ${filename}: ${chunkIndex + 1} of ${metadata.totalChunks} steps.`);
     }
-    onProgress(`Finished ${metadata[fileIndex].filename}`);
+    onProgress(`Saving ${filename} into the library...`);
+    return await api("/api/resources/upload-complete", {
+      method: "POST",
+      body: {
+        uploadId,
+        files: [metadata],
+        autoCategorize: options.autoCategorize,
+        targetCategoryId: options.targetCategoryId
+      },
+      signal
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId } }).catch(() => {});
+    }
+    throw error;
   }
-  onProgress("Processing uploaded PDFs/files into the selected folders...");
-  return api("/api/resources/upload-complete", {
-    method: "POST",
-    body: {
-      uploadId,
-      files: metadata,
-      autoCategorize: options.autoCategorize,
-      targetCategoryId: options.targetCategoryId
-    },
-    signal
-  });
+}
+
+async function uploadChunked(files, options, onProgress, onFileSaved, signal) {
+  const totals = { resources: [], skipped: [] };
+  for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+    if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
+    const data = await uploadChunkedFile(files[fileIndex], fileIndex, files.length, options, onProgress, signal);
+    const addedResources = Array.isArray(data.resources) ? data.resources : [];
+    const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+    totals.resources.push(...addedResources);
+    totals.skipped.push(...skipped);
+    onFileSaved?.(data, fileIndex + 1, files.length);
+  }
+  return totals;
 }
 
 function route() {
@@ -610,6 +625,17 @@ function wireAdmin() {
         data = await uploadChunked(files, options, (message) => {
           uploadStatus.textContent = message;
           addUploadLog(message);
+        }, async (partial, completed, total) => {
+          const addedResources = Array.isArray(partial.resources) ? partial.resources : [];
+          const skipped = Array.isArray(partial.skipped) ? partial.skipped : [];
+          addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
+          skipped.forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
+          uploadStatus.textContent = `${completed} of ${total} file(s) checked. ${addedResources.length} added in this step, ${skipped.length} skipped.`;
+          state.resources = [...(Array.isArray(state.resources) ? state.resources : []), ...addedResources];
+          state.skippedUploads = [...(Array.isArray(state.skippedUploads) ? state.skippedUploads : []), ...skipped];
+          refreshResourceReviewTable();
+          refreshSkippedUploadsTable();
+          wireResourceActions();
         }, uploadController.signal);
       } else {
         const form = new FormData();
