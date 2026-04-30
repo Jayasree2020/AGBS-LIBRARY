@@ -854,11 +854,17 @@ async function routeApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/resources") {
     const query = String(url.searchParams.get("q") || "").toLowerCase();
+    const terms = query.split(/\s+/).filter(Boolean);
     const category = url.searchParams.get("category");
+    const categories = await db.all("categories");
     const resources = (await db.all("resources")).filter((item) => {
       if (!isStaff(user) && item.status !== "published") return false;
       if (category && item.categoryId !== category) return false;
-      if (query && !`${item.title} ${item.author || ""}`.toLowerCase().includes(query)) return false;
+      if (terms.length) {
+        const resourceCategory = categories.find((entry) => entry.id === item.categoryId);
+        const haystack = `${item.title || ""} ${item.author || ""} ${item.format || ""} ${item.originalFilename || ""} ${resourceCategory?.name || ""}`.toLowerCase();
+        if (!terms.every((term) => haystack.includes(term))) return false;
+      }
       return true;
     });
     return json(res, 200, { resources: resources.map(publicResource) });
@@ -940,6 +946,14 @@ async function routeApi(req, res, url) {
     if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
     const skipped = (await db.all("skippedUploads")).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     return json(res, 200, { skipped });
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/skipped-uploads/")) {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const id = url.pathname.split("/").pop();
+    const removed = await db.delete("skippedUploads", id);
+    if (!removed) return json(res, 404, { error: "Skipped upload record not found." });
+    return json(res, 200, { ok: true });
   }
 
   if (req.method === "PATCH" && url.pathname.startsWith("/api/resources/")) {

@@ -223,7 +223,7 @@ async function libraryPage() {
     const category = categories.find((item) => item.id === resource.categoryId);
     const haystack = `${resource.title || ""} ${resource.author || ""} ${resource.format || ""} ${resource.originalFilename || ""} ${category?.name || ""}`.toLowerCase();
     const categoryMatches = !currentCategory || resource.categoryId === currentCategory.id;
-    const textMatches = !terms.length || terms.some((term) => haystack.includes(term));
+    const textMatches = !terms.length || terms.every((term) => haystack.includes(term));
     return categoryMatches && textMatches;
   }) : [];
   const emptyMessage = hasBrowseRequest
@@ -467,7 +467,7 @@ async function adminPage() {
       <h2>Book count</h2>
       <div id="bookCountSummary">${bookCountSummary()}</div>
       <div class="section-heading">
-        <h2>Library files</h2>
+        <h2>Recently added or updated books</h2>
       </div>
       <table class="table" id="resourceReviewTable">
         <thead><tr><th>Title</th><th>Category</th><th>Format</th><th>Action</th></tr></thead>
@@ -531,12 +531,13 @@ function skippedUploadsTable() {
       <td>${escapeHtml(item.reason)}</td>
       <td>${formatBytes(item.size)}</td>
       <td>${escapeHtml(new Date(item.createdAt).toLocaleString())}</td>
+      <td><button class="danger" data-remove-skipped="${item.id}">Remove</button></td>
     </tr>
   `).join("");
   return `
     <table class="table">
-      <thead><tr><th>File</th><th>Reason</th><th>Size</th><th>Skipped at</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="4">No skipped duplicate uploads yet.</td></tr>`}</tbody>
+      <thead><tr><th>File</th><th>Reason</th><th>Size</th><th>Skipped at</th><th>Action</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5">No skipped duplicate uploads yet.</td></tr>`}</tbody>
     </table>
   `;
 }
@@ -649,6 +650,7 @@ function wireAdmin() {
           refreshResourceReviewTable();
           refreshSkippedUploadsTable();
           wireResourceActions();
+          wireSkippedUploadActions();
         }, uploadController.signal);
       } else {
         const form = new FormData();
@@ -673,6 +675,7 @@ function wireAdmin() {
       refreshResourceReviewTable();
       refreshSkippedUploadsTable();
       wireResourceActions();
+      wireSkippedUploadActions();
     } catch (error) {
       const stopped = error.name === "AbortError";
       uploadStatus.textContent = stopped ? "Upload stopped." : error.message;
@@ -710,6 +713,7 @@ function wireAdmin() {
     }
   });
   wireResourceActions();
+  wireSkippedUploadActions();
   wireStudentActions();
 }
 
@@ -721,7 +725,10 @@ function refreshResourceReviewTable() {
 }
 
 function resourceRowsHtml() {
-  const resources = Array.isArray(state.resources) ? state.resources : [];
+  const resources = (Array.isArray(state.resources) ? state.resources : [])
+    .slice()
+    .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
+    .slice(0, 25);
   return resources.length ? resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No uploaded resources yet.</td></tr>`;
 }
 
@@ -747,6 +754,17 @@ function wireStudentActions() {
       await api(`/api/users/${button.dataset.removeUser}`, { method: "DELETE" });
       state.reports = await api("/api/reports");
       refreshStudentAccountsTable();
+    });
+  });
+}
+
+function wireSkippedUploadActions() {
+  document.querySelectorAll("[data-remove-skipped]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await api(`/api/skipped-uploads/${button.dataset.removeSkipped}`, { method: "DELETE" });
+      state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
+      refreshSkippedUploadsTable();
+      wireSkippedUploadActions();
     });
   });
 }
