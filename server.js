@@ -408,7 +408,7 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
 function generateTemporaryPassword(studentName, email) {
   const source = `${studentName || ""} ${String(email || "").split("@")[0]}`;
   const prefix = source.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 3) || "stu";
-  return `${prefix.padEnd(3, "x")}@agbs`;
+  return `${prefix.padEnd(3, "x")}@agbs2020`;
 }
 
 function verifyPassword(password, saved) {
