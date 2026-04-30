@@ -7,7 +7,15 @@ const state = {
   skippedUploads: [],
   reports: null,
   readingSessionId: null,
-  activeUpload: null
+  activeUpload: null,
+  uploadActivity: {
+    running: false,
+    status: "",
+    logs: [],
+    added: 0,
+    skipped: 0,
+    failed: 0
+  }
 };
 
 const app = document.querySelector("#app");
@@ -29,7 +37,7 @@ function isZipFile(file) {
 
 async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, label = "Uploading") {
   const uploadId = crypto.randomUUID();
-  state.activeUpload = { uploadId };
+  state.activeUpload = { ...(state.activeUpload || {}), uploadId };
   const chunkSize = 1024 * 1024;
   const filename = file.webkitRelativePath || file.name;
   const metadata = {
@@ -185,13 +193,74 @@ function layout(content) {
         </nav>
       </header>
       ${content}
+      ${uploadDock()}
     </div>
   `;
   wireLinks();
+  wireUploadDock();
   document.querySelector("#logoutBtn")?.addEventListener("click", async () => {
     await api("/api/auth/logout", { method: "POST" });
     state.user = null;
     go("/login");
+  });
+}
+
+function setUploadActivityStatus(message) {
+  state.uploadActivity.status = message;
+  document.querySelector("#uploadStatus") && (document.querySelector("#uploadStatus").textContent = message);
+  refreshUploadDock();
+}
+
+function addUploadActivityLog(message) {
+  state.uploadActivity.logs.push(message);
+  state.uploadActivity.logs = state.uploadActivity.logs.slice(-80);
+  const uploadLog = document.querySelector("#uploadLog");
+  if (uploadLog) {
+    const line = document.createElement("div");
+    line.textContent = message;
+    uploadLog.appendChild(line);
+    uploadLog.scrollTop = uploadLog.scrollHeight;
+  }
+  refreshUploadDock();
+}
+
+function uploadDock() {
+  if (!state.uploadActivity.running && !state.uploadActivity.status) return "";
+  const activity = state.uploadActivity;
+  return `
+    <aside class="upload-dock" id="uploadDock">
+      <div>
+        <strong>${activity.running ? "Upload running" : "Upload finished"}</strong>
+        <p>${escapeHtml(activity.status || "Preparing upload...")}</p>
+        <small>${activity.added} added, ${activity.skipped} skipped, ${activity.failed} failed</small>
+      </div>
+      ${activity.running ? `<button type="button" class="danger" data-stop-global-upload>Stop</button>` : `<button type="button" class="secondary" data-hide-upload-dock>Hide</button>`}
+    </aside>
+  `;
+}
+
+function refreshUploadDock() {
+  const existing = document.querySelector("#uploadDock");
+  const html = uploadDock();
+  if (!html) {
+    existing?.remove();
+    return;
+  }
+  if (existing) existing.outerHTML = html;
+  else document.querySelector(".shell")?.insertAdjacentHTML("beforeend", html);
+  wireUploadDock();
+}
+
+function wireUploadDock() {
+  document.querySelector("[data-stop-global-upload]")?.addEventListener("click", async () => {
+    const upload = state.activeUpload;
+    upload?.controller?.abort();
+    setUploadActivityStatus("Stopping upload...");
+    if (upload?.uploadId) await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId: upload.uploadId } }).catch(() => {});
+  });
+  document.querySelector("[data-hide-upload-dock]")?.addEventListener("click", () => {
+    state.uploadActivity = { running: false, status: "", logs: [], added: 0, skipped: 0, failed: 0 };
+    refreshUploadDock();
   });
 }
 
@@ -661,10 +730,7 @@ function wireAdmin() {
   const stopUploadButton = document.querySelector("#stopUpload");
   let uploadController = null;
   const addUploadLog = (message) => {
-    const line = document.createElement("div");
-    line.textContent = message;
-    uploadLog.appendChild(line);
-    uploadLog.scrollTop = uploadLog.scrollHeight;
+    addUploadActivityLog(message);
   };
   const selectedUploadFiles = () => [...resourceInput.files, ...folderInput.files];
   const updateUploadSelection = () => {
@@ -673,7 +739,8 @@ function wireAdmin() {
     const hasZip = files.some(isZipFile);
     const mb = (totalSize / 1024 / 1024).toFixed(2);
     uploadSelection.textContent = files.length ? `${files.length} file(s) selected, ${mb} MB total.` : "No files selected.";
-    uploadStatus.textContent = totalSize > 4 * 1024 * 1024 || hasZip ? "Safe upload mode will send each PDF/file or ZIP entry carefully, then place the finished files into folders." : "";
+    const message = totalSize > 4 * 1024 * 1024 || hasZip ? "Safe upload mode will send each PDF/file or ZIP entry carefully, then place the finished files into folders." : "";
+    uploadStatus.textContent = message;
   };
   resourceInput.addEventListener("change", updateUploadSelection);
   folderInput.addEventListener("change", updateUploadSelection);
@@ -681,7 +748,7 @@ function wireAdmin() {
     if (!uploadController) return;
     stopUploadButton.disabled = true;
     uploadController.abort();
-    uploadStatus.textContent = "Stopping upload...";
+    setUploadActivityStatus("Stopping upload...");
     addUploadLog("Upload stop requested.");
     if (state.activeUpload?.uploadId) {
       try {
@@ -696,7 +763,7 @@ function wireAdmin() {
     const files = selectedUploadFiles();
     const totalSize = files.reduce((sum, file) => sum + file.size, 0);
     if (!files.length) {
-      uploadStatus.textContent = "Choose files or a folder first.";
+      setUploadActivityStatus("Choose files or a folder first.");
       return;
     }
     const options = {
@@ -705,14 +772,16 @@ function wireAdmin() {
     };
     try {
       uploadController = new AbortController();
+      state.activeUpload = { controller: uploadController };
+      state.uploadActivity = { running: true, status: "Uploading...", logs: [], added: 0, skipped: 0, failed: 0 };
       uploadButton.disabled = true;
       stopUploadButton.disabled = false;
       uploadLog.innerHTML = "";
-      uploadStatus.textContent = "Uploading...";
+      setUploadActivityStatus("Uploading...");
       let data;
       if (totalSize > 4 * 1024 * 1024 || files.some(isZipFile)) {
         data = await uploadChunked(files, options, (message) => {
-          uploadStatus.textContent = message;
+          setUploadActivityStatus(message);
           addUploadLog(message);
         }, async (partial, completed, total) => {
           const addedResources = Array.isArray(partial.resources) ? partial.resources : [];
@@ -722,7 +791,10 @@ function wireAdmin() {
           skipped.forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
           failed.forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
           const progressLabel = partial.progressLabel || `${completed} of ${total} file(s) checked.`;
-          uploadStatus.textContent = `${progressLabel} ${addedResources.length} added in this step, ${skipped.length} skipped, ${failed.length} failed.`;
+          state.uploadActivity.added += addedResources.length;
+          state.uploadActivity.skipped += skipped.length;
+          state.uploadActivity.failed += failed.length;
+          setUploadActivityStatus(`${progressLabel} ${addedResources.length} added in this step, ${skipped.length} skipped, ${failed.length} failed.`);
           state.resources = [...(Array.isArray(state.resources) ? state.resources : []), ...addedResources];
           if (addedResources.length) {
             state.resourceCounts.total = Number(state.resourceCounts.total || 0) + addedResources.length;
@@ -749,7 +821,10 @@ function wireAdmin() {
       const skippedCount = data.skipped?.length || 0;
       const failedCount = data.failed?.length || 0;
       const addedResources = Array.isArray(data.resources) ? data.resources : [];
-      uploadStatus.textContent = `${addedResources.length} file(s) added to the library. ${skippedCount} skipped. ${failedCount} failed.`;
+      state.uploadActivity.added += addedResources.length;
+      state.uploadActivity.skipped += skippedCount;
+      state.uploadActivity.failed += failedCount;
+      setUploadActivityStatus(`${addedResources.length} file(s) added to the library. ${skippedCount} skipped. ${failedCount} failed.`);
       addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
       (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
       (data.failed || []).forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
@@ -762,13 +837,15 @@ function wireAdmin() {
       wireSkippedUploadActions();
     } catch (error) {
       const stopped = error.name === "AbortError";
-      uploadStatus.textContent = stopped ? "Upload stopped." : error.message;
+      setUploadActivityStatus(stopped ? "Upload stopped." : error.message);
       addUploadLog(stopped ? "Upload stopped before completion." : `Error: ${error.message}`);
     } finally {
       uploadButton.disabled = false;
       stopUploadButton.disabled = true;
       uploadController = null;
       state.activeUpload = null;
+      state.uploadActivity.running = false;
+      refreshUploadDock();
     }
   });
   document.querySelector("#userForm").addEventListener("submit", async (event) => {
