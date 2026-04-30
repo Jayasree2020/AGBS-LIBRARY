@@ -447,8 +447,11 @@ function generateTemporaryPassword(studentName, email) {
 function verifyPassword(password, saved) {
   if (!password || !saved || !saved.includes(":")) return false;
   const [salt, hash] = saved.split(":");
+  if (!/^[a-f0-9]{128}$/i.test(hash || "")) return false;
   const check = crypto.scryptSync(password, salt, 64);
-  return crypto.timingSafeEqual(Buffer.from(hash, "hex"), check);
+  const savedHash = Buffer.from(hash, "hex");
+  if (savedHash.length !== check.length) return false;
+  return crypto.timingSafeEqual(savedHash, check);
 }
 
 function sign(value) {
@@ -1213,6 +1216,24 @@ async function routeApi(req, res, url) {
       removedBy: user.id
     });
     return json(res, 200, { ok: true });
+  }
+
+  if (req.method === "POST" && url.pathname.match(/^\/api\/users\/[^/]+\/reset-password$/)) {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const id = url.pathname.split("/")[3];
+    const target = await db.findOne("users", (item) => item.id === id);
+    if (!target) return json(res, 404, { error: "User not found." });
+    if (!["student", "director", "admin"].includes(target.role)) return json(res, 400, { error: "This user cannot be reset." });
+    const temporaryPassword = generateTemporaryPassword(target.name, target.email);
+    const updated = await db.update("users", id, {
+      passwordHash: hashPassword(temporaryPassword),
+      provider: "password",
+      active: true,
+      removedAt: null,
+      removedBy: null,
+      temporaryPasswordSetAt: new Date().toISOString()
+    });
+    return json(res, 200, { user: publicUser(updated), temporaryPassword });
   }
 
   if (req.method === "GET" && url.pathname === "/api/reports") {

@@ -696,7 +696,10 @@ function studentAccountsTable() {
       <td>${escapeHtml(user.email)}</td>
       <td><span class="badge ${user.active === false ? "pending" : "published"}">${user.active === false ? "removed" : "active"}</span></td>
       <td>${user.removedAt ? escapeHtml(new Date(user.removedAt).toLocaleString()) : ""}</td>
-      <td>${user.active === false ? "" : `<button class="danger" data-remove-user="${user.id}">Remove access</button>`}</td>
+      <td>
+        <button class="secondary" data-reset-user="${user.id}">Reset password</button>
+        ${user.active === false ? "" : `<button class="danger" data-remove-user="${user.id}">Remove access</button>`}
+      </td>
     </tr>
   `).join("");
   return `
@@ -909,6 +912,18 @@ function refreshBookCountSummary() {
 }
 
 function wireStudentActions() {
+  document.querySelectorAll("[data-reset-user]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      const result = await api(`/api/users/${button.dataset.resetUser}/reset-password`, { method: "POST" });
+      document.querySelector("#userStatus").textContent = `Password reset for ${result.user.name || result.user.email}. Give this temporary password to the student.`;
+      document.querySelector("#tempPasswordValue").textContent = result.temporaryPassword;
+      document.querySelector("#tempPasswordBox").hidden = false;
+      state.reports = await api("/api/reports");
+      refreshStudentAccountsTable();
+      wireStudentActions();
+    });
+  });
   document.querySelectorAll("[data-remove-user]").forEach((button) => {
     button.addEventListener("click", async () => {
       if (!confirm("Remove this student's access?")) return;
