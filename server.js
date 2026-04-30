@@ -405,10 +405,10 @@ function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
   return `${salt}:${hash}`;
 }
 
-function generateTemporaryPassword() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-  const bytes = crypto.randomBytes(10);
-  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+function generateTemporaryPassword(studentName, email) {
+  const source = `${studentName || ""} ${String(email || "").split("@")[0]}`;
+  const prefix = source.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 3) || "stu";
+  return `${prefix.padEnd(3, "x")}@agbs`;
 }
 
 function verifyPassword(password, saved) {
@@ -983,7 +983,7 @@ async function routeApi(req, res, url) {
     if (!email) return json(res, 400, { error: "Email is required." });
     const existing = await db.findOne("users", (item) => item.email === email);
     if (existing && existing.active !== false) return json(res, 409, { error: "This email already exists." });
-    const temporaryPassword = generateTemporaryPassword();
+    const temporaryPassword = generateTemporaryPassword(body.name, email);
     const role = ["student", "admin", "director"].includes(body.role) ? body.role : "student";
     if (existing) {
       const updated = await db.update("users", existing.id, {

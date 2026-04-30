@@ -444,7 +444,7 @@ async function adminPage() {
             <label>Email <input name="email" type="email" required></label>
             <input name="role" type="hidden" value="student">
             <button>Create student login</button>
-            <p class="subtle" id="userStatus"></p>
+            <p class="subtle" id="userStatus">Temporary password format: first 3 letters + @agbs.</p>
             <div class="temp-password" id="tempPasswordBox" hidden>
               <span>Temporary password</span>
               <strong id="tempPasswordValue"></strong>
