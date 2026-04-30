@@ -3,6 +3,7 @@ const state = {
   config: null,
   categories: [],
   resources: [],
+  resourceCounts: { total: 0, byCategory: {} },
   skippedUploads: [],
   reports: null,
   readingSessionId: null,
@@ -266,29 +267,43 @@ function loginPage() {
   });
 }
 
-async function loadLibrary() {
-  const [categories, resources] = await Promise.all([api("/api/categories"), api("/api/resources")]);
+async function loadCategories() {
+  const categories = await api("/api/categories");
   state.categories = Array.isArray(categories.categories) ? categories.categories : [];
+}
+
+async function loadResources({ q = "", categoryId = "", limit = 0, sort = "" } = {}) {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (categoryId) params.set("category", categoryId);
+  if (limit) params.set("limit", String(limit));
+  if (sort) params.set("sort", sort);
+  const resources = await api(`/api/resources${params.toString() ? `?${params}` : ""}`);
   state.resources = Array.isArray(resources.resources) ? resources.resources : [];
 }
 
+async function loadLibrary() {
+  await Promise.all([loadCategories(), loadResources()]);
+}
+
+async function loadAdminSummary() {
+  const summary = await api("/api/resources-summary");
+  state.resources = Array.isArray(summary.recentResources) ? summary.recentResources : [];
+  state.resourceCounts = summary.counts || { total: 0, byCategory: {} };
+}
+
 async function libraryPage() {
-  await loadLibrary();
+  await loadCategories();
   const params = new URLSearchParams(window.location.search);
   const categorySlug = params.get("category") || (route().startsWith("/library/") ? decodeURIComponent(route().split("/").pop()) : "");
   const searchText = params.get("q") || "";
   const categories = Array.isArray(state.categories) ? state.categories : [];
-  const allResources = Array.isArray(state.resources) ? state.resources : [];
   const currentCategory = categories.find((item) => item.slug === categorySlug || item.id === categorySlug);
   const terms = searchText.toLowerCase().split(/\s+/).filter(Boolean);
   const hasBrowseRequest = Boolean(currentCategory || terms.length);
-  const resources = hasBrowseRequest ? allResources.filter((resource) => {
-    const category = categories.find((item) => item.id === resource.categoryId);
-    const haystack = `${resource.title || ""} ${resource.author || ""} ${resource.format || ""} ${resource.originalFilename || ""} ${category?.name || ""}`.toLowerCase();
-    const categoryMatches = !currentCategory || resource.categoryId === currentCategory.id;
-    const textMatches = !terms.length || terms.every((term) => haystack.includes(term));
-    return categoryMatches && textMatches;
-  }) : [];
+  if (hasBrowseRequest) await loadResources({ q: searchText, categoryId: currentCategory?.id || "" });
+  else state.resources = [];
+  const resources = Array.isArray(state.resources) ? state.resources : [];
   const emptyMessage = hasBrowseRequest
     ? "No matching books were found. Try another title, author, file word, or department."
     : "Search a title, author, file word, or choose a department to see books.";
@@ -354,9 +369,8 @@ function wireResourceButtons() {
 }
 
 async function readPage() {
-  await loadLibrary();
   const id = route().split("/").pop();
-  const resource = (Array.isArray(state.resources) ? state.resources : []).find((item) => item.id === id);
+  const resource = (await api(`/api/resources/${id}`)).resource;
   if (!resource) return layout(`<main class="page"><div class="notice">This resource is unavailable.</div></main>`);
   const session = await api("/api/reading/start", { method: "POST", body: { resourceId: id } });
   state.readingSessionId = session.readingSession.id;
@@ -470,8 +484,7 @@ async function endReading() {
 
 async function adminPage() {
   if (!["admin", "director"].includes(state.user?.role)) return layout(`<main class="page"><div class="notice">Admin access required.</div></main>`);
-  await loadLibrary();
-  const [reports, skipped] = await Promise.all([api("/api/reports"), api("/api/skipped-uploads")]);
+  const [reports, skipped] = await Promise.all([api("/api/reports"), api("/api/skipped-uploads"), loadCategories(), loadAdminSummary()]);
   state.reports = reports || { users: [], reads: [], logins: [], resources: [] };
   state.skippedUploads = Array.isArray(skipped.skipped) ? skipped.skipped : [];
   layout(`
@@ -548,10 +561,10 @@ async function adminPage() {
 }
 
 function bookCountSummary() {
-  const resources = Array.isArray(state.resources) ? state.resources : [];
+  const counts = state.resourceCounts || { total: 0, byCategory: {} };
   const categories = Array.isArray(state.categories) ? state.categories : [];
   const categoryCards = categories.map((category) => {
-    const count = resources.filter((resource) => resource.categoryId === category.id).length;
+    const count = Number(counts.byCategory?.[category.id] || 0);
     return `
       <article class="stat-card">
         <span>${escapeHtml(category.name)}</span>
@@ -563,7 +576,7 @@ function bookCountSummary() {
     <section class="stats-grid">
       <article class="stat-card stat-total">
         <span>Total books</span>
-        <strong>${resources.length}</strong>
+        <strong>${Number(counts.total || 0)}</strong>
       </article>
       ${categoryCards}
     </section>
@@ -711,6 +724,12 @@ function wireAdmin() {
           const progressLabel = partial.progressLabel || `${completed} of ${total} file(s) checked.`;
           uploadStatus.textContent = `${progressLabel} ${addedResources.length} added in this step, ${skipped.length} skipped, ${failed.length} failed.`;
           state.resources = [...(Array.isArray(state.resources) ? state.resources : []), ...addedResources];
+          if (addedResources.length) {
+            state.resourceCounts.total = Number(state.resourceCounts.total || 0) + addedResources.length;
+            for (const resource of addedResources) {
+              state.resourceCounts.byCategory[resource.categoryId || ""] = Number(state.resourceCounts.byCategory[resource.categoryId || ""] || 0) + 1;
+            }
+          }
           state.skippedUploads = [...(Array.isArray(state.skippedUploads) ? state.skippedUploads : []), ...skipped];
           refreshResourceReviewTable();
           refreshSkippedUploadsTable();
@@ -734,7 +753,7 @@ function wireAdmin() {
       addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
       (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
       (data.failed || []).forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
-      await loadLibrary();
+      await loadAdminSummary();
       state.reports = await api("/api/reports");
       state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
       refreshResourceReviewTable();

@@ -215,6 +215,8 @@ class R2Store {
     this.collections = ["users", "categories", "resources", "uploadBatches", "loginSessions", "readingSessions", "accessEvents", "skippedUploads"];
     this.endpoint = `https://${accountId}.r2.cloudflarestorage.com`;
     this.credentials = { accessKeyId, secretAccessKey };
+    this.jsonCache = new Map();
+    this.jsonCacheMs = 10000;
   }
 
   async init() {
@@ -277,11 +279,16 @@ class R2Store {
       Body: JSON.stringify(value, null, 2),
       ContentType: "application/json; charset=utf-8"
     }));
+    this.jsonCache.set(key, { value, expiresAt: Date.now() + this.jsonCacheMs });
   }
 
   async getJson(key) {
+    const cached = this.jsonCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
     const response = await this.client.send(new this.commands.GetObjectCommand({ Bucket: this.bucket, Key: key }));
-    return JSON.parse((await this.bodyToBuffer(response.Body)).toString("utf8"));
+    const value = JSON.parse((await this.bodyToBuffer(response.Body)).toString("utf8"));
+    this.jsonCache.set(key, { value, expiresAt: Date.now() + this.jsonCacheMs });
+    return value;
   }
 
   async all(collection) {
@@ -948,8 +955,10 @@ async function routeApi(req, res, url) {
     const query = String(url.searchParams.get("q") || "").toLowerCase();
     const terms = query.split(/\s+/).filter(Boolean);
     const category = url.searchParams.get("category");
+    const limit = Math.max(0, Math.min(200, Number(url.searchParams.get("limit") || 0)));
+    const sort = url.searchParams.get("sort");
     const categories = await db.all("categories");
-    const resources = (await db.all("resources")).filter((item) => {
+    let resources = (await db.all("resources")).filter((item) => {
       if (!isStaff(user) && item.status !== "published") return false;
       if (category && item.categoryId !== category) return false;
       if (terms.length) {
@@ -959,7 +968,32 @@ async function routeApi(req, res, url) {
       }
       return true;
     });
+    if (sort === "recent") resources = resources.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
+    if (limit) resources = resources.slice(0, limit);
     return json(res, 200, { resources: resources.map(publicResource) });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/resources-summary") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const resources = await db.all("resources");
+    const counts = resources.reduce((result, resource) => {
+      result.total += 1;
+      result.byCategory[resource.categoryId || ""] = (result.byCategory[resource.categoryId || ""] || 0) + 1;
+      return result;
+    }, { total: 0, byCategory: {} });
+    const recentResources = resources
+      .slice()
+      .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
+      .slice(0, 25)
+      .map(publicResource);
+    return json(res, 200, { counts, recentResources });
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/api/resources/")) {
+    const id = url.pathname.split("/").pop();
+    const resource = await db.findOne("resources", (item) => item.id === id && (item.status === "published" || isStaff(user)));
+    if (!resource) return json(res, 404, { error: "Resource not found." });
+    return json(res, 200, { resource: publicResource(resource) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/resources/upload") {
@@ -1186,8 +1220,7 @@ async function routeApi(req, res, url) {
     const users = await db.all("users");
     const logins = await db.all("loginSessions");
     const reads = await db.all("readingSessions");
-    const resources = await db.all("resources");
-    return json(res, 200, { users: users.map(publicUser), logins, reads, resources: resources.map(publicResource) });
+    return json(res, 200, { users: users.map(publicUser), logins, reads });
   }
 
   if (req.method === "POST" && url.pathname === "/api/reading/start") {
