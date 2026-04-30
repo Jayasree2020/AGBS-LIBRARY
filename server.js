@@ -869,6 +869,10 @@ function slug(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+function requestIp(req) {
+  return String(req.headers["x-forwarded-for"] || req.headers["x-real-ip"] || req.socket?.remoteAddress || "").split(",")[0].trim();
+}
+
 async function routeApi(req, res, url) {
   const user = await currentUser(req);
 
@@ -908,7 +912,7 @@ async function routeApi(req, res, url) {
       email: loginUser.email,
       startedAt: new Date().toISOString(),
       endedAt: null,
-      ip: req.socket.remoteAddress,
+      ip: requestIp(req),
       userAgent: req.headers["user-agent"] || ""
     });
     res.setHeader("Set-Cookie", makeCookie(session.id));
@@ -1305,7 +1309,7 @@ async function routeGoogleCallback(req, res, url) {
     email: user.email,
     startedAt: new Date().toISOString(),
     endedAt: null,
-    ip: req.socket.remoteAddress,
+    ip: requestIp(req),
     userAgent: req.headers["user-agent"] || "",
     provider: "google"
   });
