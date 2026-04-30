@@ -826,10 +826,20 @@ function wireStudentActions() {
 function wireSkippedUploadActions() {
   document.querySelectorAll("[data-remove-skipped]").forEach((button) => {
     button.addEventListener("click", async () => {
-      await api(`/api/skipped-uploads/${button.dataset.removeSkipped}`, { method: "DELETE" });
-      state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
-      refreshSkippedUploadsTable();
-      wireSkippedUploadActions();
+      button.disabled = true;
+      const originalText = button.textContent;
+      button.textContent = "Removing...";
+      try {
+        await api(`/api/skipped-uploads/${button.dataset.removeSkipped}`, { method: "DELETE" });
+        button.closest("tr")?.remove();
+        state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
+        refreshSkippedUploadsTable();
+        wireSkippedUploadActions();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = originalText;
+        alert(error.message);
+      }
     });
   });
 }

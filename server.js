@@ -618,8 +618,8 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       skipped.push(await recordSkippedUpload({ file, reason: "Duplicate file already exists in the library", user, batch, hash }));
       continue;
     }
-    const suggested = categorySuggestion(file.filename);
-    const category = autoCategorize ? (categories.find((item) => item.name === suggested) || selectedCategory) : selectedCategory;
+    const category = autoCategorize ? (categoryForFile(file.filename, categories) || selectedCategory) : selectedCategory;
+    const suggested = category?.name || selectedCategory?.name || "";
     const storageName = `${crypto.randomUUID()}${extension}`;
     await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
     if (typeof db.saveFile === "function") {
@@ -779,22 +779,48 @@ function publicUser(user) {
   return safe;
 }
 
+function normalizeCategoryText(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function compactCategoryText(value) {
+  return normalizeCategoryText(value).replace(/\s+/g, "");
+}
+
+function categoryForFile(filename, categories) {
+  const raw = String(filename || "");
+  const segments = raw.split(/[\\/]+/).filter(Boolean);
+  const normalizedSegments = segments.map(normalizeCategoryText);
+  for (const category of categories) {
+    const categoryCompact = compactCategoryText(category.name);
+    const direct = normalizedSegments.some((segment) => {
+      const segmentCompact = compactCategoryText(segment);
+      return segmentCompact === categoryCompact || segmentCompact.includes(categoryCompact) || categoryCompact.includes(segmentCompact);
+    });
+    if (direct) return category;
+  }
+  const suggested = categorySuggestion(raw);
+  return categories.find((item) => compactCategoryText(item.name) === compactCategoryText(suggested)) || null;
+}
+
 function categorySuggestion(name) {
-  const lower = name.toLowerCase();
+  const lower = normalizeCategoryText(name);
+  const compact = compactCategoryText(name);
+  const includes = (word) => lower.includes(normalizeCategoryText(word)) || compact.includes(compactCategoryText(word));
   const rules = [
-    ["Old Testament", ["old testament", "genesis", "exodus", "leviticus", "numbers", "deuteronomy", "psalm", "isaiah"]],
-    ["New Testament", ["new testament", "gospel", "matthew", "mark", "luke", "john", "paul", "romans", "revelation"]],
-    ["Christian Theology", ["christian theology", "theology", "doctrine", "christology", "pneumatology", "ecclesiology", "trinity"]],
-    ["History of Christianity", ["history of christianity", "church history", "christian history", "patristic", "reformation", "medieval", "ancient church"]],
-    ["Christian Ministry", ["christian ministry", "ministry", "pastoral", "counsel", "care", "chaplain", "grief", "preaching", "homiletic", "worship"]],
-    ["Missiology", ["mission", "missiology", "evangel", "church planting"]],
-    ["Communication", ["communication", "media", "journalism", "public speaking", "writing", "broadcast"]],
-    ["Christian Ethics", ["christian ethics", "ethics", "moral", "bioethics", "justice", "virtue"]],
-    ["Religions", ["religion", "religions", "hindu", "islam", "buddhist", "buddhism", "interfaith", "comparative"]],
-    ["Social Analysis", ["social", "society", "analysis", "politic", "econom", "caste", "culture", "development"]],
+    ["Old Testament", ["old testament", "oldtestament", "genesis", "exodus", "leviticus", "numbers", "deuteronomy", "psalm", "isaiah", "jeremiah", "ezekiel", "hebrew bible"]],
+    ["New Testament", ["new testament", "newtestament", "gospel", "matthew", "mark", "luke", "john", "acts", "paul", "romans", "corinthians", "revelation"]],
+    ["Christian Theology", ["christian theology", "theology", "systematic theology", "doctrine", "christology", "pneumatology", "ecclesiology", "trinity", "atonement", "soteriology"]],
+    ["History of Christianity", ["history of christianity", "history christianity", "history of christnaity", "history of christian", "church history", "christian history", "patristic", "reformation", "medieval", "ancient church", "historical theology"]],
+    ["Christian Ministry", ["christian ministry", "ministry", "pastoral", "counsel", "counseling", "care", "chaplain", "grief", "preaching", "homiletic", "worship", "leadership"]],
+    ["Missiology", ["mission", "missions", "missiology", "evangel", "church planting", "missionary"]],
+    ["Communication", ["communication", "media", "journalism", "public speaking", "writing", "broadcast", "speech"]],
+    ["Christian Ethics", ["christian ethics", "ethics", "moral", "bioethics", "justice", "virtue", "rights"]],
+    ["Religions", ["religion", "religions", "hindu", "hinduism", "islam", "muslim", "buddhist", "buddhism", "interfaith", "comparative religion"]],
+    ["Social Analysis", ["social", "society", "analysis", "politic", "politics", "econom", "caste", "culture", "development", "sociology"]],
     ["Women Studies", ["women", "woman", "gender", "feminist", "feminism", "womanist"]]
   ];
-  return rules.find(([, words]) => words.some((word) => lower.includes(word)))?.[0] || "";
+  return rules.find(([, words]) => words.some(includes))?.[0] || "";
 }
 
 function fieldValue(parts, name, fallback = "") {
