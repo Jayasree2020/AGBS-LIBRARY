@@ -251,6 +251,10 @@ class R2Store {
     return this.key(`tmp/uploads/${uploadId}/${fileIndex}/${suffix}`);
   }
 
+  tempZipKey(uploadId) {
+    return this.key(`tmp/zips/${uploadId}.zip`);
+  }
+
   async exists(key) {
     try {
       await this.client.send(new this.commands.HeadObjectCommand({ Bucket: this.bucket, Key: key }));
@@ -381,6 +385,28 @@ class R2Store {
       }
       ContinuationToken = response.NextContinuationToken;
     } while (ContinuationToken);
+    await this.client.send(new this.commands.DeleteObjectCommand({ Bucket: this.bucket, Key: this.tempZipKey(uploadId) })).catch(() => {});
+  }
+
+  async saveTempZip(uploadId, buffer) {
+    await this.client.send(new this.commands.PutObjectCommand({
+      Bucket: this.bucket,
+      Key: this.tempZipKey(uploadId),
+      Body: buffer,
+      ContentType: "application/zip"
+    }));
+  }
+
+  async readTempZip(uploadId) {
+    try {
+      const response = await this.client.send(new this.commands.GetObjectCommand({
+        Bucket: this.bucket,
+        Key: this.tempZipKey(uploadId)
+      }));
+      return await this.bodyToBuffer(response.Body);
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -537,20 +563,41 @@ async function parseMultipart(req) {
 async function unpackUpload(file) {
   const extension = path.extname(file.filename).toLowerCase();
   if (extension !== ".zip") return [file];
+  return await zipEntryFiles(file.content);
+}
+
+async function zipEntries(buffer) {
   try {
     const { default: AdmZip } = await import("adm-zip");
-    const zip = new AdmZip(file.content);
-    return zip.getEntries()
-      .filter((entry) => !entry.isDirectory)
-      .map((entry) => ({
-        name: "files",
-        filename: entry.entryName,
-        contentType: mimeTypes[path.extname(entry.entryName).toLowerCase()] || "application/octet-stream",
-        content: entry.getData()
-      }));
+    const zip = new AdmZip(buffer);
+    return zip.getEntries().filter((entry) => !entry.isDirectory);
   } catch {
     throw new Error("ZIP support needs dependencies installed. Run npm install in the deployment environment.");
   }
+}
+
+async function zipEntryFiles(buffer) {
+  const entries = await zipEntries(buffer);
+  return entries.map((entry) => ({
+    name: "files",
+    filename: entry.entryName,
+    contentType: mimeTypes[path.extname(entry.entryName).toLowerCase()] || "application/octet-stream",
+    content: entry.getData()
+  }));
+}
+
+async function zipEntryAt(buffer, index) {
+  const entries = await zipEntries(buffer);
+  const entry = entries[index];
+  return {
+    totalEntries: entries.length,
+    file: entry ? {
+      name: "files",
+      filename: entry.entryName,
+      contentType: mimeTypes[path.extname(entry.entryName).toLowerCase()] || "application/octet-stream",
+      content: entry.getData()
+    } : null
+  };
 }
 
 async function saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch }) {
@@ -630,6 +677,25 @@ async function removeUploadChunks(uploadId) {
     return;
   }
   await fs.rm(path.join(CHUNK_DIR, uploadId), { recursive: true, force: true });
+}
+
+async function saveUploadZip(uploadId, buffer) {
+  if (typeof db.saveTempZip === "function") {
+    await db.saveTempZip(uploadId, buffer);
+    return;
+  }
+  const dir = path.join(CHUNK_DIR, uploadId);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, "upload.zip"), buffer);
+}
+
+async function readUploadZip(uploadId) {
+  if (typeof db.readTempZip === "function") {
+    return await db.readTempZip(uploadId);
+  }
+  const file = path.join(CHUNK_DIR, uploadId, "upload.zip");
+  if (!existsSync(file)) return null;
+  return await fs.readFile(file);
 }
 
 function fileHash(buffer) {
@@ -940,6 +1006,56 @@ async function routeApi(req, res, url) {
     await removeUploadChunks(uploadId);
     if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
     return json(res, 201, { resources: saved.map(publicResource), skipped });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/resources/upload-zip-start") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const body = await bodyJson(req);
+    const uploadId = safeChunkName(body.uploadId);
+    const meta = body.file || {};
+    const fileIndex = safeChunkName(meta.fileIndex);
+    const totalChunks = Number(meta.totalChunks || 0);
+    const filename = String(meta.filename || "upload.zip");
+    if (!uploadId || !fileIndex || !totalChunks) return json(res, 400, { error: "Missing ZIP upload details." });
+    const buffers = [];
+    for (let index = 0; index < totalChunks; index++) {
+      const chunk = await readUploadChunk(uploadId, fileIndex, index);
+      if (!chunk) return json(res, 400, { error: `Missing ZIP chunk ${index + 1} for ${filename}. Please try the upload again.` });
+      buffers.push(chunk);
+    }
+    const zipBuffer = Buffer.concat(buffers);
+    await saveUploadZip(uploadId, zipBuffer);
+    const entries = await zipEntries(zipBuffer);
+    if (!entries.length) {
+      await removeUploadChunks(uploadId);
+      return json(res, 400, { error: "No files were found inside that ZIP." });
+    }
+    const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: entries.length, status: "processing", uploadMode: "zip-progressive", originalFilename: filename });
+    return json(res, 201, { uploadId, batchId: batch.id, totalEntries: entries.length });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/resources/upload-zip-entry") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const body = await bodyJson(req);
+    const uploadId = safeChunkName(body.uploadId);
+    const batchId = String(body.batchId || "");
+    const entryIndex = Number(body.entryIndex);
+    const autoCategorize = body.autoCategorize !== false;
+    const categories = await db.all("categories");
+    const selectedCategory = categories.find((item) => item.id === body.targetCategoryId) || categories[0];
+    const batch = await db.findOne("uploadBatches", (item) => item.id === batchId);
+    if (!uploadId || !batch || !Number.isInteger(entryIndex) || entryIndex < 0) return json(res, 400, { error: "Missing ZIP entry details." });
+    const zipBuffer = await readUploadZip(uploadId);
+    if (!zipBuffer) return json(res, 404, { error: "Temporary ZIP was not found. Please upload it again." });
+    const { totalEntries, file } = await zipEntryAt(zipBuffer, entryIndex);
+    if (!file) return json(res, 404, { error: "ZIP entry was not found." });
+    const { saved, skipped } = await saveUploadedResources({ files: [file], categories, selectedCategory, autoCategorize, user, batch });
+    const done = entryIndex + 1 >= totalEntries;
+    if (done) {
+      await db.update("uploadBatches", batch.id, { status: "processed" });
+      await removeUploadChunks(uploadId);
+    }
+    return json(res, 201, { resources: saved.map(publicResource), skipped, entryName: file.filename, entryIndex, totalEntries, done });
   }
 
   if (req.method === "GET" && url.pathname === "/api/skipped-uploads") {

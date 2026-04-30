@@ -22,7 +22,11 @@ async function api(path, options = {}) {
   return data;
 }
 
-async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgress, signal) {
+function isZipFile(file) {
+  return (file.webkitRelativePath || file.name || "").toLowerCase().endsWith(".zip");
+}
+
+async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, label = "Uploading") {
   const uploadId = crypto.randomUUID();
   state.activeUpload = { uploadId };
   const chunkSize = 1024 * 1024;
@@ -33,21 +37,30 @@ async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgres
     contentType: file.type,
     totalChunks: Math.max(1, Math.ceil(file.size / chunkSize))
   };
-  try {
+  if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
+  onProgress(`Starting ${fileIndex + 1} of ${totalFiles}: ${filename}`);
+  for (let chunkIndex = 0; chunkIndex < metadata.totalChunks; chunkIndex++) {
     if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
-    onProgress(`Starting ${fileIndex + 1} of ${totalFiles}: ${filename}`);
-    for (let chunkIndex = 0; chunkIndex < metadata.totalChunks; chunkIndex++) {
-      if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
-      const start = chunkIndex * chunkSize;
-      const chunk = file.slice(start, start + chunkSize);
-      const form = new FormData();
-      form.append("uploadId", uploadId);
-      form.append("fileIndex", "0");
-      form.append("chunkIndex", String(chunkIndex));
-      form.append("chunk", chunk, `0-${chunkIndex}.part`);
-      await api("/api/resources/upload-chunk", { method: "POST", body: form, signal });
-      onProgress(`Uploading ${filename}: ${chunkIndex + 1} of ${metadata.totalChunks} steps.`);
-    }
+    const start = chunkIndex * chunkSize;
+    const chunk = file.slice(start, start + chunkSize);
+    const form = new FormData();
+    form.append("uploadId", uploadId);
+    form.append("fileIndex", "0");
+    form.append("chunkIndex", String(chunkIndex));
+    form.append("chunk", chunk, `0-${chunkIndex}.part`);
+    await api("/api/resources/upload-chunk", { method: "POST", body: form, signal });
+    onProgress(`${label} ${filename}: ${chunkIndex + 1} of ${metadata.totalChunks} steps.`);
+  }
+  return { uploadId, metadata };
+}
+
+async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgress, signal) {
+  let uploadId = "";
+  try {
+    const sent = await sendFileChunks(file, fileIndex, totalFiles, onProgress, signal);
+    uploadId = sent.uploadId;
+    const metadata = sent.metadata;
+    const filename = metadata.filename;
     onProgress(`Saving ${filename} into the library...`);
     return await api("/api/resources/upload-complete", {
       method: "POST",
@@ -60,9 +73,50 @@ async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgres
       signal
     });
   } catch (error) {
-    if (error.name === "AbortError") {
+    if (uploadId && error.name === "AbortError") {
       await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId } }).catch(() => {});
     }
+    throw error;
+  }
+}
+
+async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, onEntrySaved, signal) {
+  let uploadId = "";
+  const totals = { resources: [], skipped: [], failed: [] };
+  try {
+    const sent = await sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, "Uploading ZIP");
+    uploadId = sent.uploadId;
+    onProgress(`Opening ZIP ${sent.metadata.filename}...`);
+    const started = await api("/api/resources/upload-zip-start", {
+      method: "POST",
+      body: { uploadId, file: sent.metadata, autoCategorize: options.autoCategorize, targetCategoryId: options.targetCategoryId },
+      signal
+    });
+    for (let entryIndex = 0; entryIndex < started.totalEntries; entryIndex++) {
+      if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
+      onProgress(`Saving ZIP entry ${entryIndex + 1} of ${started.totalEntries} from ${sent.metadata.filename}...`);
+      try {
+        const data = await api("/api/resources/upload-zip-entry", {
+          method: "POST",
+          body: { uploadId, batchId: started.batchId, entryIndex, autoCategorize: options.autoCategorize, targetCategoryId: options.targetCategoryId },
+          signal
+        });
+        const addedResources = Array.isArray(data.resources) ? data.resources : [];
+        const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+        totals.resources.push(...addedResources);
+        totals.skipped.push(...skipped);
+        onEntrySaved?.({ ...data, progressLabel: `ZIP ${sent.metadata.filename}: ${entryIndex + 1} of ${started.totalEntries} entries checked.` }, fileIndex + 1, totalFiles);
+      } catch (error) {
+        if (error.name === "AbortError") throw error;
+        const failed = { filename: `${sent.metadata.filename} entry ${entryIndex + 1}`, reason: error.message };
+        totals.failed.push(failed);
+        onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${sent.metadata.filename}: ${entryIndex + 1} of ${started.totalEntries} entries checked.` }, fileIndex + 1, totalFiles);
+      }
+    }
+    await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId } }).catch(() => {});
+    return totals;
+  } catch (error) {
+    if (uploadId) await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId } }).catch(() => {});
     throw error;
   }
 }
@@ -72,11 +126,20 @@ async function uploadChunked(files, options, onProgress, onFileSaved, signal) {
   for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
     if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
     try {
+      if (isZipFile(files[fileIndex])) {
+        const zipData = await uploadZipFile(files[fileIndex], fileIndex, files.length, options, onProgress, onFileSaved, signal);
+        totals.resources.push(...(Array.isArray(zipData.resources) ? zipData.resources : []));
+        totals.skipped.push(...(Array.isArray(zipData.skipped) ? zipData.skipped : []));
+        totals.failed.push(...(Array.isArray(zipData.failed) ? zipData.failed : []));
+        continue;
+      }
       const data = await uploadChunkedFile(files[fileIndex], fileIndex, files.length, options, onProgress, signal);
       const addedResources = Array.isArray(data.resources) ? data.resources : [];
       const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+      const failed = Array.isArray(data.failed) ? data.failed : [];
       totals.resources.push(...addedResources);
       totals.skipped.push(...skipped);
+      totals.failed.push(...failed);
       onFileSaved?.(data, fileIndex + 1, files.length);
     } catch (error) {
       if (error.name === "AbortError") throw error;
@@ -594,9 +657,10 @@ function wireAdmin() {
   const updateUploadSelection = () => {
     const files = selectedUploadFiles();
     const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+    const hasZip = files.some(isZipFile);
     const mb = (totalSize / 1024 / 1024).toFixed(2);
     uploadSelection.textContent = files.length ? `${files.length} file(s) selected, ${mb} MB total.` : "No files selected.";
-    uploadStatus.textContent = totalSize > 4 * 1024 * 1024 ? "Large upload mode will send each PDF/file safely, then place the finished files into folders." : "";
+    uploadStatus.textContent = totalSize > 4 * 1024 * 1024 || hasZip ? "Safe upload mode will send each PDF/file or ZIP entry carefully, then place the finished files into folders." : "";
   };
   resourceInput.addEventListener("change", updateUploadSelection);
   folderInput.addEventListener("change", updateUploadSelection);
@@ -633,7 +697,7 @@ function wireAdmin() {
       uploadLog.innerHTML = "";
       uploadStatus.textContent = "Uploading...";
       let data;
-      if (totalSize > 4 * 1024 * 1024) {
+      if (totalSize > 4 * 1024 * 1024 || files.some(isZipFile)) {
         data = await uploadChunked(files, options, (message) => {
           uploadStatus.textContent = message;
           addUploadLog(message);
@@ -644,7 +708,8 @@ function wireAdmin() {
           addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
           skipped.forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
           failed.forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
-          uploadStatus.textContent = `${completed} of ${total} file(s) checked. ${addedResources.length} added in this step, ${skipped.length} skipped, ${failed.length} failed.`;
+          const progressLabel = partial.progressLabel || `${completed} of ${total} file(s) checked.`;
+          uploadStatus.textContent = `${progressLabel} ${addedResources.length} added in this step, ${skipped.length} skipped, ${failed.length} failed.`;
           state.resources = [...(Array.isArray(state.resources) ? state.resources : []), ...addedResources];
           state.skippedUploads = [...(Array.isArray(state.skippedUploads) ? state.skippedUploads : []), ...skipped];
           refreshResourceReviewTable();
