@@ -68,15 +68,22 @@ async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgres
 }
 
 async function uploadChunked(files, options, onProgress, onFileSaved, signal) {
-  const totals = { resources: [], skipped: [] };
+  const totals = { resources: [], skipped: [], failed: [] };
   for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
     if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
-    const data = await uploadChunkedFile(files[fileIndex], fileIndex, files.length, options, onProgress, signal);
-    const addedResources = Array.isArray(data.resources) ? data.resources : [];
-    const skipped = Array.isArray(data.skipped) ? data.skipped : [];
-    totals.resources.push(...addedResources);
-    totals.skipped.push(...skipped);
-    onFileSaved?.(data, fileIndex + 1, files.length);
+    try {
+      const data = await uploadChunkedFile(files[fileIndex], fileIndex, files.length, options, onProgress, signal);
+      const addedResources = Array.isArray(data.resources) ? data.resources : [];
+      const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+      totals.resources.push(...addedResources);
+      totals.skipped.push(...skipped);
+      onFileSaved?.(data, fileIndex + 1, files.length);
+    } catch (error) {
+      if (error.name === "AbortError") throw error;
+      const filename = files[fileIndex].webkitRelativePath || files[fileIndex].name;
+      totals.failed.push({ filename, reason: error.message });
+      onFileSaved?.({ resources: [], skipped: [], failed: [{ filename, reason: error.message }] }, fileIndex + 1, files.length);
+    }
   }
   return totals;
 }
@@ -628,9 +635,11 @@ function wireAdmin() {
         }, async (partial, completed, total) => {
           const addedResources = Array.isArray(partial.resources) ? partial.resources : [];
           const skipped = Array.isArray(partial.skipped) ? partial.skipped : [];
+          const failed = Array.isArray(partial.failed) ? partial.failed : [];
           addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
           skipped.forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
-          uploadStatus.textContent = `${completed} of ${total} file(s) checked. ${addedResources.length} added in this step, ${skipped.length} skipped.`;
+          failed.forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
+          uploadStatus.textContent = `${completed} of ${total} file(s) checked. ${addedResources.length} added in this step, ${skipped.length} skipped, ${failed.length} failed.`;
           state.resources = [...(Array.isArray(state.resources) ? state.resources : []), ...addedResources];
           state.skippedUploads = [...(Array.isArray(state.skippedUploads) ? state.skippedUploads : []), ...skipped];
           refreshResourceReviewTable();
@@ -648,10 +657,12 @@ function wireAdmin() {
         data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal });
       }
       const skippedCount = data.skipped?.length || 0;
+      const failedCount = data.failed?.length || 0;
       const addedResources = Array.isArray(data.resources) ? data.resources : [];
-      uploadStatus.textContent = `${addedResources.length} file(s) added to the library. ${skippedCount} skipped.`;
+      uploadStatus.textContent = `${addedResources.length} file(s) added to the library. ${skippedCount} skipped. ${failedCount} failed.`;
       addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
       (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
+      (data.failed || []).forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
       await loadLibrary();
       state.reports = await api("/api/reports");
       state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];

@@ -218,8 +218,8 @@ class R2Store {
   }
 
   async init() {
-    const { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand } = await import("@aws-sdk/client-s3");
-    this.commands = { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand };
+    const { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } = await import("@aws-sdk/client-s3");
+    this.commands = { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand };
     this.client = new S3Client({
       region: "auto",
       endpoint: this.endpoint,
@@ -243,6 +243,12 @@ class R2Store {
 
   fileKey(name) {
     return this.key(`books/${name}`);
+  }
+
+  tempChunkKey(uploadId, fileIndex, chunkIndex = "") {
+    if (fileIndex === "") return this.key(`tmp/uploads/${uploadId}/`);
+    const suffix = chunkIndex === "" ? "" : `${chunkIndex}.part`;
+    return this.key(`tmp/uploads/${uploadId}/${fileIndex}/${suffix}`);
   }
 
   async exists(key) {
@@ -335,6 +341,46 @@ class R2Store {
 
   async deleteFile(name) {
     await this.client.send(new this.commands.DeleteObjectCommand({ Bucket: this.bucket, Key: this.fileKey(name) }));
+  }
+
+  async saveTempChunk(uploadId, fileIndex, chunkIndex, buffer) {
+    await this.client.send(new this.commands.PutObjectCommand({
+      Bucket: this.bucket,
+      Key: this.tempChunkKey(uploadId, fileIndex, chunkIndex),
+      Body: buffer,
+      ContentType: "application/octet-stream"
+    }));
+  }
+
+  async readTempChunk(uploadId, fileIndex, chunkIndex) {
+    try {
+      const response = await this.client.send(new this.commands.GetObjectCommand({
+        Bucket: this.bucket,
+        Key: this.tempChunkKey(uploadId, fileIndex, chunkIndex)
+      }));
+      return await this.bodyToBuffer(response.Body);
+    } catch {
+      return null;
+    }
+  }
+
+  async deleteTempUpload(uploadId) {
+    let ContinuationToken;
+    do {
+      const response = await this.client.send(new this.commands.ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: this.tempChunkKey(uploadId, ""),
+        ContinuationToken
+      }));
+      const objects = (response.Contents || []).map((item) => ({ Key: item.Key }));
+      if (objects.length) {
+        await this.client.send(new this.commands.DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Objects: objects, Quiet: true }
+        }));
+      }
+      ContinuationToken = response.NextContinuationToken;
+    } while (ContinuationToken);
   }
 }
 
@@ -556,6 +602,34 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
 
 function safeChunkName(value) {
   return String(value ?? "").replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+async function saveUploadChunk(uploadId, fileIndex, chunkIndex, content) {
+  if (typeof db.saveTempChunk === "function") {
+    await db.saveTempChunk(uploadId, fileIndex, chunkIndex, content);
+    return;
+  }
+  const dir = path.join(CHUNK_DIR, uploadId, fileIndex);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, `${chunkIndex}.part`), content);
+}
+
+async function readUploadChunk(uploadId, fileIndex, chunkIndex) {
+  if (typeof db.readTempChunk === "function") {
+    return await db.readTempChunk(uploadId, fileIndex, chunkIndex);
+  }
+  const chunkPath = path.join(CHUNK_DIR, uploadId, fileIndex, `${chunkIndex}.part`);
+  if (!existsSync(chunkPath)) return null;
+  return await fs.readFile(chunkPath);
+}
+
+async function removeUploadChunks(uploadId) {
+  if (!uploadId) return;
+  if (typeof db.deleteTempUpload === "function") {
+    await db.deleteTempUpload(uploadId);
+    return;
+  }
+  await fs.rm(path.join(CHUNK_DIR, uploadId), { recursive: true, force: true });
 }
 
 function fileHash(buffer) {
@@ -816,9 +890,7 @@ async function routeApi(req, res, url) {
     const fileIndex = safeChunkName(fieldValue(parts, "fileIndex"));
     const chunkIndex = safeChunkName(fieldValue(parts, "chunkIndex"));
     if (!uploadId || !fileIndex || !chunkIndex) return json(res, 400, { error: "Missing chunk metadata." });
-    const dir = path.join(CHUNK_DIR, uploadId, fileIndex);
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, `${chunkIndex}.part`), chunk.content);
+    await saveUploadChunk(uploadId, fileIndex, chunkIndex, chunk.content);
     return json(res, 200, { ok: true });
   }
 
@@ -827,7 +899,7 @@ async function routeApi(req, res, url) {
     const body = await bodyJson(req);
     const uploadId = safeChunkName(body.uploadId);
     if (!uploadId) return json(res, 400, { error: "Missing upload id." });
-    await fs.rm(path.join(CHUNK_DIR, uploadId), { recursive: true, force: true });
+    await removeUploadChunks(uploadId);
     return json(res, 200, { ok: true });
   }
 
@@ -842,12 +914,11 @@ async function routeApi(req, res, url) {
     for (const meta of body.files || []) {
       const fileIndex = safeChunkName(meta.fileIndex);
       const totalChunks = Number(meta.totalChunks || 0);
-      const dir = path.join(CHUNK_DIR, uploadId, fileIndex);
       const buffers = [];
       for (let index = 0; index < totalChunks; index++) {
-        const chunkPath = path.join(dir, `${index}.part`);
-        if (!existsSync(chunkPath)) return json(res, 400, { error: `Missing chunk ${index + 1} for ${meta.filename}. Please try the upload again.` });
-        buffers.push(await fs.readFile(chunkPath));
+        const chunk = await readUploadChunk(uploadId, fileIndex, index);
+        if (!chunk) return json(res, 400, { error: `Missing chunk ${index + 1} for ${meta.filename}. Please try the upload again.` });
+        buffers.push(chunk);
       }
       assembled.push({
         name: "files",
@@ -860,7 +931,7 @@ async function routeApi(req, res, url) {
     for (const uploaded of assembled) files.push(...await unpackUpload(uploaded));
     const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: files.length, status: "processed", uploadMode: "chunked" });
     const { saved, skipped } = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
-    await fs.rm(path.join(CHUNK_DIR, uploadId), { recursive: true, force: true });
+    await removeUploadChunks(uploadId);
     if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
     return json(res, 201, { resources: saved.map(publicResource), skipped });
   }
