@@ -168,9 +168,10 @@ AWS_SECRET_ACCESS_KEY
 AWS_S3_BUCKET
 AWS_S3_PREFIX
 AWS_STORAGE_BUDGET_GB
+AWS_STORAGE_PLAN_MONTHS
 ```
 
-`AWS_STORAGE_BUDGET_GB` is set to `1500` by default so the dashboard tracks storage against a two-year credit plan instead of spending the full AWS credit balance in one month.
+`AWS_STORAGE_BUDGET_GB` is set to `1500` and `AWS_STORAGE_PLAN_MONTHS` is set to `24` by default so the dashboard tracks storage against a two-year credit plan instead of spending the full AWS credit balance in one month.
 
 JSON record files stored in AWS S3:
 
@@ -211,7 +212,7 @@ Never place real values for these in GitHub or frontend files.
 ## Current Important Behavior
 
 - Uploads go directly to the library.
-- Admin dashboard shows AWS storage used, book-file storage, object count, and remaining storage estimate.
+- Admin dashboard shows only total storage left and estimated month runway.
 - No publish button is required.
 - Duplicate files are skipped.
 - Skipped duplicates are admin-only.

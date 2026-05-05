@@ -646,30 +646,21 @@ function formatGb(value) {
 function storageUsageSummary() {
   const usage = state.storageUsage || {};
   const remaining = usage.remainingGb === null || usage.remainingGb === undefined ? "Set budget" : formatGb(usage.remainingGb);
-  const percent = usage.usagePercent === null || usage.usagePercent === undefined ? 0 : Number(usage.usagePercent || 0);
+  const runway = usage.runwayMonths === null || usage.runwayMonths === undefined
+    ? `${Number(usage.planMonths || 24)}+ months`
+    : `${Math.max(1, Math.floor(Number(usage.runwayMonths || 0))).toLocaleString()} months`;
   return `
-    <section class="stats-grid storage-grid">
+    <section class="stats-grid storage-grid storage-simple">
       <article class="stat-card stat-total">
-        <span>Storage used</span>
-        <strong>${formatGb(usage.usedGb)}</strong>
-      </article>
-      <article class="stat-card">
-        <span>Book files</span>
-        <strong>${formatGb(usage.bookGb)}</strong>
-      </article>
-      <article class="stat-card">
-        <span>Remaining estimate</span>
+        <span>Total storage left</span>
         <strong>${remaining}</strong>
       </article>
       <article class="stat-card">
-        <span>Objects in AWS</span>
-        <strong>${Number(usage.totalObjects || 0)}</strong>
+        <span>Month runway</span>
+        <strong>${runway}</strong>
       </article>
     </section>
-    <div class="storage-meter" aria-label="AWS storage usage">
-      <span style="width: ${Math.max(0, Math.min(100, percent))}%"></span>
-    </div>
-    <p class="subtle">Budget estimate: ${formatGb(usage.budgetGb)}. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
+    <p class="subtle">Plan: ${formatGb(usage.budgetGb)} for ${Number(usage.planMonths || 24)} months. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
   `;
 }
 
