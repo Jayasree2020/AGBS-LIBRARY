@@ -747,9 +747,9 @@ function inferAuthor(filename) {
 }
 
 function inferTitle(filename) {
-  const base = path.basename(String(filename || ""), path.extname(String(filename || ""))).replace(/[_-]+/g, " ").trim();
+  const base = path.basename(String(filename || ""), path.extname(String(filename || ""))).replace(/[_]+/g, " ").trim();
   const match = base.match(/^(.{2,80}?)\s+-\s+(.{2,160})$/);
-  return (match ? match[2] : base).trim();
+  return (match ? match[2] : base.replace(/[-]+/g, " ")).trim();
 }
 
 const deweyRules = [
