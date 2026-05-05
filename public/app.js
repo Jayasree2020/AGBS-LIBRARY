@@ -4,6 +4,7 @@ const state = {
   categories: [],
   resources: [],
   resourceCounts: { total: 0, byCategory: {} },
+  storageUsage: null,
   skippedUploads: [],
   reports: null,
   readingSessionId: null,
@@ -361,6 +362,10 @@ async function loadAdminSummary() {
   state.resourceCounts = summary.counts || { total: 0, byCategory: {} };
 }
 
+async function loadStorageUsage() {
+  state.storageUsage = await api("/api/storage-usage");
+}
+
 async function libraryPage() {
   await loadCategories();
   const params = new URLSearchParams(window.location.search);
@@ -553,7 +558,7 @@ async function endReading() {
 
 async function adminPage() {
   if (!["admin", "director"].includes(state.user?.role)) return layout(`<main class="page"><div class="notice">Admin access required.</div></main>`);
-  const [reports, skipped] = await Promise.all([api("/api/reports"), api("/api/skipped-uploads"), loadCategories(), loadAdminSummary()]);
+  const [reports, skipped] = await Promise.all([api("/api/reports"), api("/api/skipped-uploads"), loadCategories(), loadAdminSummary(), loadStorageUsage()]);
   state.reports = reports || { users: [], reads: [], logins: [], resources: [] };
   state.skippedUploads = Array.isArray(skipped.skipped) ? skipped.skipped : [];
   layout(`
@@ -609,6 +614,8 @@ async function adminPage() {
           </form>
         </div>
       </section>
+      <h2>AWS storage</h2>
+      <div id="storageUsageSummary">${storageUsageSummary()}</div>
       <h2>Book count</h2>
       <div id="bookCountSummary">${bookCountSummary()}</div>
       <div class="section-heading">
@@ -627,6 +634,43 @@ async function adminPage() {
     </main>
   `);
   wireAdmin();
+}
+
+function formatGb(value) {
+  const number = Number(value || 0);
+  if (number >= 1000) return `${(number / 1000).toFixed(2)} TB`;
+  if (number >= 1) return `${number.toFixed(2)} GB`;
+  return `${(number * 1000).toFixed(1)} MB`;
+}
+
+function storageUsageSummary() {
+  const usage = state.storageUsage || {};
+  const remaining = usage.remainingGb === null || usage.remainingGb === undefined ? "Set budget" : formatGb(usage.remainingGb);
+  const percent = usage.usagePercent === null || usage.usagePercent === undefined ? 0 : Number(usage.usagePercent || 0);
+  return `
+    <section class="stats-grid storage-grid">
+      <article class="stat-card stat-total">
+        <span>Storage used</span>
+        <strong>${formatGb(usage.usedGb)}</strong>
+      </article>
+      <article class="stat-card">
+        <span>Book files</span>
+        <strong>${formatGb(usage.bookGb)}</strong>
+      </article>
+      <article class="stat-card">
+        <span>Remaining estimate</span>
+        <strong>${remaining}</strong>
+      </article>
+      <article class="stat-card">
+        <span>Objects in AWS</span>
+        <strong>${Number(usage.totalObjects || 0)}</strong>
+      </article>
+    </section>
+    <div class="storage-meter" aria-label="AWS storage usage">
+      <span style="width: ${Math.max(0, Math.min(100, percent))}%"></span>
+    </div>
+    <p class="subtle">Budget estimate: ${formatGb(usage.budgetGb)}. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
+  `;
 }
 
 function bookCountSummary() {
@@ -804,6 +848,7 @@ function wireAdmin() {
             for (const resource of addedResources) {
               state.resourceCounts.byCategory[resource.categoryId || ""] = Number(state.resourceCounts.byCategory[resource.categoryId || ""] || 0) + 1;
             }
+            refreshStorageUsage().catch(() => {});
           }
           state.skippedUploads = [...(Array.isArray(state.skippedUploads) ? state.skippedUploads : []), ...skipped];
           refreshResourceReviewTable();
@@ -835,6 +880,7 @@ function wireAdmin() {
       state.reports = await api("/api/reports");
       state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
       refreshResourceReviewTable();
+      await refreshStorageUsage();
       refreshSkippedUploadsTable();
       wireResourceActions();
       wireSkippedUploadActions();
@@ -909,6 +955,13 @@ function refreshStudentAccountsTable() {
 function refreshBookCountSummary() {
   const wrap = document.querySelector("#bookCountSummary");
   if (wrap) wrap.innerHTML = bookCountSummary();
+}
+
+async function refreshStorageUsage() {
+  const wrap = document.querySelector("#storageUsageSummary");
+  if (!wrap) return;
+  await loadStorageUsage();
+  wrap.innerHTML = storageUsageSummary();
 }
 
 function wireStudentActions() {

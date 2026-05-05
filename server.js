@@ -31,6 +31,7 @@ const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID || "";
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY || "";
 const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET || "";
 const AWS_S3_PREFIX = (process.env.AWS_S3_PREFIX || "agbs-library").replace(/^\/+|\/+$/g, "");
+const AWS_STORAGE_BUDGET_GB = Number(process.env.AWS_STORAGE_BUDGET_GB || 1500);
 const RUNTIME_DIR = process.env.VERCEL ? path.join(os.tmpdir(), "agbs-library") : __dirname;
 const DATA_DIR = path.join(RUNTIME_DIR, "data");
 const STORAGE_DIR = path.join(RUNTIME_DIR, "storage");
@@ -127,6 +128,41 @@ class JsonStore {
 
   async filter(collection, predicate) {
     return (await this.all(collection)).filter(predicate);
+  }
+
+  async storageUsage() {
+    const usage = {
+      provider: "local-json",
+      bucket: "",
+      prefix: "",
+      totalBytes: 0,
+      totalObjects: 0,
+      bookBytes: 0,
+      bookObjects: 0,
+      dataBytes: 0,
+      dataObjects: 0,
+      tempBytes: 0,
+      tempObjects: 0
+    };
+    for (const directory of [DATA_DIR, STORAGE_DIR]) {
+      if (!existsSync(directory)) continue;
+      const files = await fs.readdir(directory, { recursive: true, withFileTypes: true });
+      for (const file of files) {
+        if (!file.isFile()) continue;
+        const fullPath = path.join(file.parentPath || directory, file.name);
+        const stat = await fs.stat(fullPath);
+        usage.totalBytes += stat.size;
+        usage.totalObjects += 1;
+        if (fullPath.startsWith(STORAGE_DIR)) {
+          usage.bookBytes += stat.size;
+          usage.bookObjects += 1;
+        } else {
+          usage.dataBytes += stat.size;
+          usage.dataObjects += 1;
+        }
+      }
+    }
+    return usage;
   }
 }
 
@@ -337,6 +373,50 @@ class ObjectStore {
     } catch {
       return null;
     }
+  }
+
+  async storageUsage() {
+    const usage = {
+      provider: "aws-s3",
+      bucket: this.bucket,
+      prefix: this.prefix,
+      totalBytes: 0,
+      totalObjects: 0,
+      bookBytes: 0,
+      bookObjects: 0,
+      dataBytes: 0,
+      dataObjects: 0,
+      tempBytes: 0,
+      tempObjects: 0
+    };
+    const bookPrefix = this.key("books/");
+    const dataPrefix = this.key("data/");
+    const tempPrefix = this.key("tmp/");
+    let ContinuationToken;
+    do {
+      const response = await this.client.send(new this.commands.ListObjectsV2Command({
+        Bucket: this.bucket,
+        Prefix: this.key(""),
+        ContinuationToken
+      }));
+      for (const item of response.Contents || []) {
+        const size = Number(item.Size || 0);
+        usage.totalBytes += size;
+        usage.totalObjects += 1;
+        if (item.Key.startsWith(bookPrefix)) {
+          usage.bookBytes += size;
+          usage.bookObjects += 1;
+        } else if (item.Key.startsWith(dataPrefix)) {
+          usage.dataBytes += size;
+          usage.dataObjects += 1;
+        } else if (item.Key.startsWith(tempPrefix)) {
+          usage.tempBytes += size;
+          usage.tempObjects += 1;
+        }
+      }
+      ContinuationToken = response.NextContinuationToken;
+    } while (ContinuationToken);
+    return usage;
   }
 }
 
@@ -916,6 +996,23 @@ async function routeApi(req, res, url) {
       .slice(0, 25)
       .map(publicResource);
     return json(res, 200, { counts, recentResources });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/storage-usage") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const usage = typeof db.storageUsage === "function" ? await db.storageUsage() : {};
+    const usedGb = Number(usage.totalBytes || 0) / 1_000_000_000;
+    const bookGb = Number(usage.bookBytes || 0) / 1_000_000_000;
+    const budgetGb = Number.isFinite(AWS_STORAGE_BUDGET_GB) && AWS_STORAGE_BUDGET_GB > 0 ? AWS_STORAGE_BUDGET_GB : 0;
+    return json(res, 200, {
+      ...usage,
+      usedGb,
+      bookGb,
+      budgetGb,
+      remainingGb: budgetGb ? Math.max(0, budgetGb - usedGb) : null,
+      usagePercent: budgetGb ? Math.min(100, (usedGb / budgetGb) * 100) : null,
+      updatedAt: new Date().toISOString()
+    });
   }
 
   if (req.method === "GET" && url.pathname.startsWith("/api/resources/")) {

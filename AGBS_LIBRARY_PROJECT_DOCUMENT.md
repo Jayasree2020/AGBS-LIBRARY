@@ -167,7 +167,10 @@ AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY
 AWS_S3_BUCKET
 AWS_S3_PREFIX
+AWS_STORAGE_BUDGET_GB
 ```
+
+`AWS_STORAGE_BUDGET_GB` is set to `1500` by default so the dashboard tracks storage against a two-year credit plan instead of spending the full AWS credit balance in one month.
 
 JSON record files stored in AWS S3:
 
@@ -208,6 +211,7 @@ Never place real values for these in GitHub or frontend files.
 ## Current Important Behavior
 
 - Uploads go directly to the library.
+- Admin dashboard shows AWS storage used, book-file storage, object count, and remaining storage estimate.
 - No publish button is required.
 - Duplicate files are skipped.
 - Skipped duplicates are admin-only.
@@ -227,10 +231,11 @@ Never place real values for these in GitHub or frontend files.
 ## Suggested Next Work
 
 1. Upload books directly through the admin dashboard.
-2. Confirm large batch upload speed with real seminary folders.
-3. Configure Google OAuth credentials for Gmail sign-in.
-4. Add better PDF/EPUB page-location tracking if required.
-5. Add export buttons for admin reports if the director needs Excel/PDF reporting.
+2. Watch the AWS storage panel after each upload batch.
+3. Confirm large batch upload speed with real seminary folders.
+4. Configure Google OAuth credentials for Gmail sign-in.
+5. Add better PDF/EPUB page-location tracking if required.
+6. Add export buttons for admin reports if the director needs Excel/PDF reporting.
 
 ## Safe Continuation Notes
 
