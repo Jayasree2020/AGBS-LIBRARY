@@ -27,6 +27,11 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "";
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${BASE_URL}/auth/google/callback`;
+const AWS_REGION = process.env.AWS_REGION || "";
+const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID || "";
+const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY || "";
+const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET || "";
+const AWS_S3_PREFIX = (process.env.AWS_S3_PREFIX || "agbs-library").replace(/^\/+|\/+$/g, "");
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
@@ -208,12 +213,13 @@ class MongoStore {
   }
 }
 
-class R2Store {
-  constructor({ accountId, accessKeyId, secretAccessKey, bucket, prefix }) {
+class ObjectStore {
+  constructor({ accessKeyId, secretAccessKey, bucket, prefix, region = "auto", endpoint = "" }) {
     this.bucket = bucket;
     this.prefix = prefix;
     this.collections = ["users", "categories", "resources", "uploadBatches", "loginSessions", "readingSessions", "accessEvents", "skippedUploads"];
-    this.endpoint = `https://${accountId}.r2.cloudflarestorage.com`;
+    this.region = region;
+    this.endpoint = endpoint;
     this.credentials = { accessKeyId, secretAccessKey };
     this.jsonCache = new Map();
     this.jsonCacheMs = 10000;
@@ -223,8 +229,8 @@ class R2Store {
     const { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } = await import("@aws-sdk/client-s3");
     this.commands = { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand };
     this.client = new S3Client({
-      region: "auto",
-      endpoint: this.endpoint,
+      region: this.region,
+      ...(this.endpoint ? { endpoint: this.endpoint } : {}),
       credentials: this.credentials
     });
     await fs.mkdir(STORAGE_DIR, { recursive: true });
@@ -418,9 +424,19 @@ class R2Store {
 }
 
 async function createStore() {
+  if (AWS_REGION && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY && AWS_S3_BUCKET) {
+    return new ObjectStore({
+      region: AWS_REGION,
+      accessKeyId: AWS_ACCESS_KEY_ID,
+      secretAccessKey: AWS_SECRET_ACCESS_KEY,
+      bucket: AWS_S3_BUCKET,
+      prefix: AWS_S3_PREFIX
+    });
+  }
   if (R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET) {
-    return new R2Store({
-      accountId: R2_ACCOUNT_ID,
+    return new ObjectStore({
+      region: "auto",
+      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
       accessKeyId: R2_ACCESS_KEY_ID,
       secretAccessKey: R2_SECRET_ACCESS_KEY,
       bucket: R2_BUCKET,
@@ -882,6 +898,7 @@ async function routeApi(req, res, url) {
     return json(res, 200, {
       googleConfigured: Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
       mongoConfigured: Boolean(process.env.MONGODB_URI),
+      awsConfigured: Boolean(AWS_REGION && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY && AWS_S3_BUCKET),
       r2Configured: Boolean(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET),
       adminEmail: ADMIN_EMAIL
     });
