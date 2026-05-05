@@ -1,46 +1,139 @@
-# AGBS LIBRARY Project Document
+# AGBS LIBRARY Project Plan And Handover
 
-## Current Live Project
+## 1. Project Summary
 
-Project name: AGBS LIBRARY
+AGBS LIBRARY is a secure digital seminary library for off-campus students. It allows students to sign in, search library resources, read approved PDF/EPUB/image files inside the app, and have their reading activity tracked for admin/director review.
+
+Admins manage:
+
+- Book uploads.
+- Categories/departments.
+- Student accounts.
+- File updates/removal.
+- Duplicate upload review.
+- Classification and bibliography exports.
+- Usage reports.
+- AWS storage tracking.
 
 Live site: https://www.agbslibrary.com
-
-Fallback Vercel URL: https://agbs-library.vercel.app
 
 GitHub repository: https://github.com/Jayasree2020/AGBS-LIBRARY
 
 Vercel project: `agbs-library`
 
-This app is a secure digital seminary library for fewer than 100 off-campus students. It allows students to log in, browse books by department, read files inside the app, and have their reading activity recorded. Admins manage books, users, categories, and reports.
+Production storage: AWS S3
 
-## Main Purpose
+Branding: Amazing Grace Biblical Seminary logo with red, gold, flame-orange, and warm cream interface colors.
 
-The app is meant to help AGBS students access seminary resources from home. The books/resources are PDF, EPUB, and image files. Students should be able to read them inside the browser without public file links or download buttons.
+## 2. Current Production Decision
 
-The app also records student usage so the admin/director can see login history, books opened, and total reading hours.
+The current production setup is:
 
-## User Roles
+```text
+Vercel = web app and serverless API
+AWS S3 = permanent books and JSON data records
+```
 
-- `student`: can log in, browse the library, search resources, and read published files.
-- `admin`: can upload and manage resources, manage users/categories, and view reports.
-- `director`: supported as a staff role with admin-style access.
+R2 and MongoDB are not used in the current production plan.
 
-Students cannot upload files.
+Reasons:
 
-## Login
+- AWS credits are available.
+- Books need large, permanent object storage.
+- Vercel serverless disk is temporary and small.
+- S3 can store very large numbers of books as complete files.
+
+Important production rule:
+
+Uploaded books must not depend on Vercel local file storage. Vercel temporary storage can fill up during large uploads and cause `ENOSPC: no space left on device`. The app now sends final files into AWS S3 in AWS mode.
+
+## 3. User Roles
+
+### Student
+
+Students can:
+
+- Sign in.
+- Search by any word.
+- Filter by category.
+- Open published resources.
+- Read protected resources.
+
+Students cannot:
+
+- Upload files.
+- See admin pages.
+- See other student records.
+- Access public AWS file links.
+
+### Admin
+
+Admins can:
+
+- Upload books.
+- Upload folders.
+- Upload ZIP files.
+- Stop an upload.
+- Clear selected files before upload.
+- Update title/category.
+- Replace files.
+- Remove files.
+- Add categories.
+- Add student accounts.
+- Reset temporary passwords.
+- Remove student access after course completion.
+- View student history.
+- Download classification and bibliography reports.
+- View storage left and estimated runway.
+
+### Director
+
+The app supports `director` as a staff role with admin-style access.
+
+## 3A. Branding And Interface Plan
+
+The site should use the seminary logo as a visible brand signal in:
+
+- Login screen.
+- Main navigation/header.
+
+The color system should follow the logo:
+
+- Deep seminary red for primary buttons and important accents.
+- Gold for highlights, borders, totals, and selected states.
+- Flame orange as a supporting accent for progress/storage.
+- Warm cream backgrounds for a softer library feel.
+- Dark brown/ink text for readability.
+
+The interface should remain practical and readable for admin work. The branding should support the library experience without making dashboards crowded.
+
+## 4. Authentication Plan
 
 The app supports:
 
 - Email/password login.
-- Admin bootstrap login from environment variables.
-- Google sign-in when Google OAuth environment variables are configured.
+- Admin bootstrap login through environment variables.
+- Google sign-in if Google OAuth variables are configured.
 
-Sensitive values such as admin password, GitHub tokens, Vercel tokens, Google OAuth secrets, AWS access keys, and session secrets must never be committed into GitHub.
+Secrets must be kept only in Vercel environment variables. They must never be committed to GitHub or placed in frontend code.
 
-## Library Departments
+Required authentication-related variables:
 
-The current default departments are:
+```text
+ADMIN_EMAIL
+ADMIN_BOOTSTRAP_PASSWORD
+SESSION_SECRET
+BASE_URL
+GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET
+GOOGLE_REDIRECT_URI
+```
+
+Google sign-in is currently optional and depends on OAuth setup.
+
+## 5. Library Departments
+
+Default departments:
 
 - Old Testament
 - New Testament
@@ -54,43 +147,16 @@ The current default departments are:
 - Social Analysis
 - Women Studies
 
-Admins can also add categories from the admin dashboard.
+Admins can add more categories from the admin dashboard.
 
-## Student Library
-
-Students see the library in a list/table format. They can:
-
-- Browse all resources.
-- Filter by category.
-- Search by any word, including title, author, file name, format, or category.
-- Open resources using the `Read` button.
-
-Files are served through protected app routes, not public storage URLs.
-
-## Admin Dashboard
-
-The admin dashboard currently includes:
-
-- Book/file upload.
-- Folder upload.
-- ZIP upload.
-- Auto-categorization by file/folder name.
-- Manual category selection.
-- Upload stop button.
-- Library file management.
-- Skipped duplicate upload list.
-- Student/user creation.
-- Category creation.
-- Student history reports.
-
-## Upload Behavior
+## 6. Upload Plan
 
 Admins can upload:
 
-- Single PDF/EPUB/image files.
-- Multiple files.
-- A folder.
-- ZIP archives.
+- One file.
+- Many selected files.
+- A whole folder.
+- A ZIP archive.
 
 Supported formats:
 
@@ -101,68 +167,190 @@ Supported formats:
 - WEBP
 - GIF
 
-When uploading, the app checks every file and does the following:
+Upload modes:
 
-- Supported new files are added directly to the library.
-- Files are automatically marked as published.
-- Files are treated as e-books and receive automatic Dewey Decimal-style classification.
-- A bibliography entry is generated for every e-book.
+- Auto-categorize by filename and folder path.
+- Manual category for the whole upload.
+
+Current upload behavior:
+
+- Each supported file is treated as an e-book resource.
+- Uploads are automatically published.
+- No publish button is required.
 - Duplicate files are skipped.
-- Skipped files are shown only to admins under `Skipped duplicate uploads`.
-- Large uploads are internally sent in smaller chunks, but the final library record remains the real PDF/EPUB/image file, not a chunk or part.
-- ZIP uploads are opened in the browser and each supported file inside the ZIP is uploaded to AWS as its own library item.
+- Skipped duplicates are visible only to admins.
+- Admins can remove skipped duplicate records.
+- Book count updates after upload.
+- Storage usage updates after upload.
 
-## Duplicate Handling
+## 7. Large Upload Plan
 
-The app prevents repeated files by checking:
+Large uploads should work like this:
 
-- File hash, when available.
-- Normalized file name plus file size.
+1. The browser sends each large file in smaller internal upload steps.
+2. Vercel receives temporary chunks only while the file is being completed.
+3. The completed file is saved to AWS S3 as one complete object.
+4. The app creates one resource record for that file.
+5. The student sees one book, not upload parts.
 
-If a file already exists, it is skipped and recorded for admin review. This prevents the student library from filling with repeated copies.
+ZIP behavior:
 
-## Admin File Management
+1. The ZIP is opened in the browser.
+2. Each supported PDF/EPUB/image inside the ZIP is extracted by the browser.
+3. Each extracted file is uploaded as its own complete library item.
+4. Unsupported files inside the ZIP are skipped.
 
-Admins can manage uploaded files with these actions:
+Why this matters:
 
-- `View`: open the uploaded file through the protected route.
-- `Save`: update the title or category.
-- `Replace`: upload a new file in place of the existing one.
-- `Remove`: delete the library record and stored file.
+Vercel cannot be used as permanent storage and cannot hold many large uploaded files in temporary disk. Large uploads previously failed when Vercel temp storage filled up. The current plan avoids that by saving final files directly to AWS S3.
 
-There is no longer a publish-pending step. Uploads are automated.
+Recommended admin practice:
 
-## Reading And Tracking
+- Upload in sensible batches.
+- Keep the browser tab open during upload.
+- Use the upload stop button if a wrong folder/file was selected.
+- Use the clear selected files button before upload if the wrong file was chosen.
+- Check skipped duplicate records after upload.
+- Check storage left after each major batch.
+
+## 8. Duplicate Handling
+
+The app checks duplicates using:
+
+- File hash.
+- Normalized filename plus file size.
+
+If a duplicate is found:
+
+- The file is not added again.
+- A skipped upload record is created.
+- Admins can review the skipped record.
+- Admins can remove skipped records from the dashboard.
+
+This keeps the student library clean and avoids repeated book entries.
+
+## 9. Classification And Bibliography Plan
+
+Every uploaded e-book should receive:
+
+- Dewey Decimal-style number.
+- Dewey class label.
+- Call number.
+- Title.
+- Author when safely detected.
+- Department/category.
+- Format.
+- Original filename.
+- Confidence level.
+- Bibliography entry.
+
+Classification is automatic and advisory. It uses:
+
+- Selected category.
+- Folder path.
+- Filename.
+- Known department keywords.
+- Bible book and theological subject keywords.
+
+Admins can correct title/category after upload. When classification exports are downloaded, bibliography details are rebuilt from the current record so older records can still export correctly after improvements.
+
+Export formats:
+
+- HTML
+- Word-compatible DOC
+- Excel-compatible XLS
+- CSV
+- PDF
+
+## 10. Student Library Plan
+
+Student library behavior:
+
+- Do not show all uploaded books by default.
+- Show books when the student searches or chooses a category.
+- Search should accept any word.
+- Category is optional.
+- Results appear in list/table form.
+- Student opens books through a protected reader route.
+
+Search should include:
+
+- Title.
+- Author.
+- Original filename.
+- Category.
+- Format.
+- Dewey number.
+- Dewey class.
+- Bibliography text.
+
+## 11. File Viewing Plan
+
+Files are served through protected routes.
+
+Current behavior:
+
+- App does not show ordinary download buttons.
+- Raw AWS object URLs are not public.
+- Admin/student must be authenticated to view a protected file.
+- Students cannot access unpublished or removed resources.
+
+Limitation:
+
+No web app can fully prevent screenshots, screen recording, or browser-level copying. The app blocks ordinary public download exposure but cannot control the user's device.
+
+## 12. Tracking Plan
 
 The app records:
 
 - Login sessions.
 - Logout/session end when available.
+- Resource opened.
 - Reading session start.
 - Reading session end.
-- Resource opened.
 - Category accessed.
-- Total reading time.
+- Total reading duration.
 
-The admin report shows student totals such as:
+Admin reports show:
 
+- Student name/email.
 - Number of logins.
-- Books opened.
+- Number of books opened.
 - Reading hours.
 
-Students do not see other students' records.
+Students cannot view other students' history.
 
-## Storage And Database
+## 13. Storage Plan
 
-The app can run with local JSON files for development, but production uses AWS S3.
+AWS S3 is the production storage system.
 
-AWS S3 production storage:
+S3 layout:
 
-- Book files are stored as one object per PDF/EPUB/image under `books/`.
-- Small app records are stored as JSON objects under `data/`.
-- Large uploads may travel in temporary upload steps, but the final stored object is still one complete file.
+```text
+agbs-library/
+  books/
+    one complete object per PDF/EPUB/image
+  data/
+    users.json
+    categories.json
+    resources.json
+    uploadBatches.json
+    loginSessions.json
+    readingSessions.json
+    accessEvents.json
+    skippedUploads.json
+  tmp/uploads/
+    temporary upload chunks
+```
 
-Required AWS environment variables:
+Storage dashboard:
+
+- Shows total storage left.
+- Shows estimated month runway.
+- Uses a 12-month planning view.
+- Current planning budget target is 3000 GB unless changed by environment variable.
+
+Storage-related environment variables:
 
 ```text
 AWS_REGION
@@ -174,26 +362,9 @@ AWS_STORAGE_BUDGET_GB
 AWS_STORAGE_PLAN_MONTHS
 ```
 
-`AWS_STORAGE_BUDGET_GB` is set to `3000` and `AWS_STORAGE_PLAN_MONTHS` is set to `12` by default so the dashboard tracks storage against a one-year AWS-credit plan.
+## 14. Environment Variables
 
-JSON record files stored in AWS S3:
-
-- `users`
-- `categories`
-- `resources`
-- `uploadBatches`
-- `loginSessions`
-- `readingSessions`
-- `accessEvents`
-- `skippedUploads`
-
-Important production note:
-
-Vercel serverless file storage is temporary. Permanent uploaded books and app records now go to AWS S3.
-
-## Environment Variables
-
-Set these in Vercel Project Settings:
+Set in Vercel Project Settings:
 
 ```text
 ADMIN_EMAIL
@@ -205,49 +376,83 @@ AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY
 AWS_S3_BUCKET
 AWS_S3_PREFIX
+AWS_STORAGE_BUDGET_GB
+AWS_STORAGE_PLAN_MONTHS
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 GOOGLE_REDIRECT_URI
 ```
 
-Never place real values for these in GitHub or frontend files.
+Never commit real values for these variables.
 
-## Current Important Behavior
+## 15. Current Verified Behavior
 
-- Uploads go directly to the library.
-- Admin dashboard shows only total storage left and estimated month runway.
-- Admin dashboard includes classification and bibliography export buttons for HTML, Word-compatible, Excel-compatible, CSV, and PDF files.
-- No publish button is required.
-- Duplicate files are skipped.
-- Skipped duplicates are admin-only.
-- Admins can view, update, replace, and remove files.
-- Students read through protected routes.
-- Search supports any word and optional category.
-- Password visibility toggle exists on login.
-- The upload stop button is available during uploads.
+Recently verified:
 
-## Known Limitations
+- Live site loads.
+- AWS S3 configuration is active.
+- Admin login works.
+- Test upload to AWS succeeded.
+- Test file was removed after verification.
+- HTML classification export works.
+- Word-compatible classification export works.
+- Catalog export includes call number and book classification details.
+- No new 500 errors after the latest upload/export fix.
 
-- Browser-level screenshots and copying cannot be fully prevented.
-- EPUB reading is served through the protected route; deeper EPUB-specific page/location tracking may need a dedicated EPUB reader library later.
-- Permanent file reliability depends on AWS S3 staying configured in Vercel.
-- Google sign-in works only after Google OAuth credentials are set correctly in Vercel.
+Current live book count at last verification: 150.
 
-## Suggested Next Work
+## 16. Known Limitations
 
-1. Upload books directly through the admin dashboard.
-2. Watch the AWS storage panel after each upload batch.
-3. Confirm large batch upload speed with real seminary folders.
-4. Configure Google OAuth credentials for Gmail sign-in.
-5. Add better PDF/EPUB page-location tracking if required.
-6. Add export buttons for admin reports if the director needs Excel/PDF reporting.
+- Very large uploads still depend on browser stability and network reliability.
+- The browser tab should stay open during upload.
+- Serverless APIs are not ideal for extremely heavy background jobs.
+- EPUB page/location tracking is basic compared with a dedicated EPUB reader library.
+- Google login will only work after Google OAuth credentials are configured.
+- JSON records in S3 are acceptable for the current small admin/student workflow, but a proper database may be needed later if usage becomes very large or multi-admin editing becomes frequent.
 
-## Safe Continuation Notes
+## 17. Future Improvement Plan
+
+Recommended next improvements:
+
+1. Add a durable background queue for very large library imports.
+2. Add upload resume across page refreshes.
+3. Add deeper PDF page tracking and EPUB location tracking.
+4. Add admin report exports for student history.
+5. Add stronger metadata extraction from PDF/EPUB files.
+6. Add manual bibliography editing fields.
+7. Add a true database if many admins edit records at the same time.
+8. Configure Google OAuth for Gmail sign-in.
+9. Add cloud monitoring alerts for failed uploads.
+10. Add automatic cleanup for old temporary upload chunks.
+
+## 18. Safe Continuation Rules
 
 When continuing this project:
 
-- Do not expose tokens or passwords in code, GitHub, README files, screenshots, or frontend JavaScript.
-- Keep students blocked from uploads.
-- Keep admin-only reports protected server-side.
-- Test upload, duplicate skip, view, replace, remove, and student reading after every major change.
-- Push changes to GitHub and deploy to Vercel after fixes are confirmed.
+- Do not expose passwords, tokens, API keys, or AWS secrets.
+- Keep all secrets in Vercel environment variables.
+- Keep student uploads disabled.
+- Keep admin routes protected server-side.
+- Keep AWS S3 as the production storage system.
+- Do not reintroduce R2 or MongoDB unless a deliberate migration is planned.
+- Test upload, duplicate skip, view, replace, remove, export, and student reading after major changes.
+- Push confirmed changes to GitHub.
+- Deploy to Vercel after code changes.
+
+## 19. Quick Test Checklist
+
+Before saying a deployment is ready:
+
+- `/api/config` shows AWS storage active.
+- Admin can sign in.
+- Admin can upload a small test file.
+- Test file appears in admin recent books.
+- Test file can be viewed through protected route.
+- Test file can be removed.
+- Student search does not show all books until search/category is used.
+- Duplicate upload is skipped.
+- Skipped duplicate can be removed.
+- HTML export downloads.
+- Word export downloads.
+- Storage panel loads.
+- No recent production 500 errors appear in Vercel logs.

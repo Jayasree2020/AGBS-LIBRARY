@@ -222,7 +222,10 @@ function layout(content) {
   app.innerHTML = `
     <div class="shell">
       <header class="topbar">
-        <div class="brand">AGBS LIBRARY</div>
+        <div class="brand">
+          <img src="/assets/agbs-logo.jpg" alt="Amazing Grace Biblical Seminary logo">
+          <span>AGBS LIBRARY</span>
+        </div>
         <nav class="nav">
           <a href="/library" data-link class="${route().startsWith("/library") ? "active" : ""}">Library</a>
           ${staff ? `<a href="/admin" data-link class="${route().startsWith("/admin") ? "active" : ""}">Admin</a>` : ""}
@@ -321,7 +324,10 @@ function loginPage() {
   app.innerHTML = `
     <main class="login-page">
       <section class="login-card">
-        <h1>AGBS LIBRARY</h1>
+        <div class="login-brand">
+          <img src="/assets/agbs-logo.jpg" alt="Amazing Grace Biblical Seminary logo">
+          <h1>AGBS LIBRARY</h1>
+        </div>
         <p class="subtle">Sign in to read approved seminary resources.</p>
         <form class="form" id="loginForm">
           <label>Email <input name="email" type="email" autocomplete="email" required></label>

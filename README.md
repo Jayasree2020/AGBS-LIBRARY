@@ -1,26 +1,37 @@
 # AGBS LIBRARY
 
-AGBS LIBRARY is a secure digital library for off-campus seminary students. It is designed for controlled access to PDF, EPUB, and image-based study resources, with department-based categorization, admin-managed uploads, and reading activity tracking.
+AGBS LIBRARY is a secure digital library portal for off-campus seminary students. It supports controlled student access to PDF, EPUB, and image-based study resources, admin-managed uploads, department-based categorization, AWS S3 storage, and reading activity tracking.
 
 Live site: [https://www.agbslibrary.com](https://www.agbslibrary.com)
 
-Fallback Vercel URL: [https://agbs-library.vercel.app](https://agbs-library.vercel.app)
+GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github.com/Jayasree2020/AGBS-LIBRARY)
 
-## What It Does
+## Current Status
 
-- Provides student and admin login.
-- Organizes resources by seminary departments.
-- Lets admins upload individual files, ZIP files, or whole folders.
-- Supports PDF, EPUB, PNG, JPG, JPEG, WEBP, and GIF files.
-- Suggests categories from file and folder names.
-- Adds uploaded resources directly to the library after upload.
-- Classifies uploaded e-books with an automatic Dewey Decimal-style class.
-- Generates a bibliography entry for each uploaded e-book.
-- Lets admins export classification and bibliography reports as HTML, Word, Excel, CSV, or PDF.
-- Skips duplicate files automatically and shows skipped files only to admins.
-- Lets admins view, save/update metadata, replace, and remove uploaded files.
-- Tracks login sessions, reading sessions, opened books, and reading time.
-- Keeps download links out of the interface and serves files through authenticated routes.
+- Production is deployed on Vercel.
+- Permanent file and data storage is AWS S3.
+- The app uses the Amazing Grace Biblical Seminary logo and a matching red, gold, flame-orange, and warm cream color system.
+- R2 and MongoDB are not part of the current production setup.
+- Uploaded books are stored in AWS as complete files, not visible upload parts.
+- Admin uploads are automatically published into the library.
+- Duplicate files are skipped and shown only to admins.
+- The admin dashboard shows total storage left and estimated month runway for a 12-month AWS storage plan.
+
+## What The App Does
+
+- Student and admin login.
+- Admin/director-only dashboard.
+- Library browsing by department.
+- Search by title, author, filename, department, format, Dewey number, Dewey class, or bibliography text.
+- Protected PDF/EPUB/image viewing inside the app.
+- Admin upload of files, folders, and ZIP archives.
+- Browser-side ZIP opening so each supported file inside the ZIP becomes its own library item.
+- Automatic category suggestion from file and folder names.
+- Automatic Dewey Decimal-style e-book classification.
+- Bibliography generation for each uploaded e-book.
+- Export of classification and bibliography data as HTML, Word-compatible DOC, Excel-compatible XLS, CSV, or PDF.
+- Student login and reading history tracking.
+- Admin student account creation, password reset, and access removal.
 
 ## Library Departments
 
@@ -36,35 +47,152 @@ Fallback Vercel URL: [https://agbs-library.vercel.app](https://agbs-library.verc
 - Social Analysis
 - Women Studies
 
-## Admin Upload Workflow
+Admins can add more categories from the dashboard.
 
-Admins can upload normal files, a ZIP archive, or a full folder. The upload screen supports two modes:
+## Upload Workflow
 
-- `Auto-categorize`: the app uses file and folder names to suggest the correct department.
-- `Manual category`: the whole upload batch goes into one selected department.
+Admins can upload:
 
-Uploaded resources are published automatically and appear immediately in the student library list. Duplicate files are skipped instead of being added again. Admins can review skipped files in the admin dashboard and re-upload only when needed.
+- A single PDF, EPUB, or image.
+- Multiple files.
+- A folder of files.
+- A ZIP archive.
 
-Each uploaded file is treated as an e-book. The app automatically assigns a Dewey Decimal-style number from the file name, folder name, and selected category, then generates a bibliography entry. Admins can download the full classification and bibliography report from the admin dashboard.
+Supported file types:
 
-Admins can manage files after upload:
+- PDF
+- EPUB
+- PNG
+- JPG/JPEG
+- WEBP
+- GIF
 
-- `View`: open the protected file route.
-- `Save`: update title/category edits.
-- `Replace`: upload a new file in place of an existing file.
-- `Remove`: delete the library record and stored file.
+Upload behavior:
 
-Large uploads are sent in smaller internal chunks so Vercel can receive them safely. ZIP uploads are opened in the browser and each PDF/EPUB/image inside the ZIP is uploaded as its own finished library file. The finished library item is still the original PDF, EPUB, or image file, not a visible chunk or part.
+- Every supported file is saved as an e-book resource.
+- Uploads are automatically published.
+- Duplicates are skipped by file hash or normalized filename plus size.
+- Skipped duplicates appear in the admin-only skipped upload list.
+- Admins can clear selected files before starting an upload.
+- Admins can stop an upload while it is running.
+- After upload, the admin can still use other dashboard actions.
+- The book count and storage panel update after upload.
 
-## Deployment
+Large upload behavior:
 
-The app is deployed on Vercel under the `agbs-library` project and is connected to the custom domain:
+- Large files are sent in smaller internal upload steps so Vercel can receive them.
+- ZIP files are opened in the browser, and each supported PDF/EPUB/image inside the ZIP is uploaded separately.
+- In AWS mode, the final file is written directly to AWS S3 instead of being kept on Vercel temporary disk.
+- This prevents the Vercel `ENOSPC: no space left on device` failure that happens when too many large files are copied into `/tmp`.
+- The final library record always points to one complete file, not a chunk.
 
-[https://www.agbslibrary.com](https://www.agbslibrary.com)
+## Classification And Bibliography
 
-Vercel is suitable for the live app interface. AWS S3 is the production storage system for both uploaded books and the app's small JSON records. Every PDF/EPUB/image is stored as one object under `books/`, and records are stored under `data/`.
+Every uploaded e-book receives:
 
-The admin dashboard shows only total storage left and estimated month runway. The default planning budget is `3000` GB for `12` months, so the portal tracks storage against a one-year AWS-credit plan.
+- Dewey Decimal-style class number.
+- Dewey class label.
+- Call number.
+- Title.
+- Author, when detected safely.
+- Department/category.
+- Format.
+- Original filename.
+- Confidence level.
+- Bibliography entry.
+
+The automatic classification is advisory. It uses department, filename, and folder path words. Admins can update the category and title after upload.
+
+Export formats available in the admin dashboard:
+
+- HTML
+- Word-compatible DOC
+- Excel-compatible XLS
+- CSV
+- PDF
+
+## Admin File Management
+
+Admins can:
+
+- View protected files.
+- Update title and category.
+- Replace an existing file.
+- Remove a file from the library and storage.
+- Remove skipped duplicate records.
+- Create student logins.
+- Reset student passwords.
+- Remove student access after course completion.
+
+There is no publish-pending step. Uploads go directly into the library.
+
+## Student Experience
+
+Students can:
+
+- Sign in with email/password.
+- Search the library by any word.
+- Filter by department.
+- Open published books through the protected reader route.
+
+Students cannot:
+
+- Upload files.
+- Access admin pages.
+- See other students' history.
+- See public AWS storage links.
+
+Download buttons are not provided by the app. Browser-level screenshots or copying cannot be fully prevented.
+
+## Tracking
+
+The app records:
+
+- Login sessions.
+- Logout/session expiry when available.
+- Resource opened.
+- Reading session start and end.
+- Category accessed.
+- Reading duration.
+
+Admin reports show:
+
+- Student email/name.
+- Login count.
+- Books opened.
+- Reading hours.
+
+## Production Architecture
+
+```text
+Student/Admin Browser
+        |
+        v
+Vercel App / Serverless API
+        |
+        v
+AWS S3
+  - books/
+  - data/
+  - tmp/uploads/
+```
+
+AWS S3 storage layout:
+
+- `books/`: complete PDF/EPUB/image objects.
+- `data/`: JSON records for users, resources, categories, sessions, logs, and skipped uploads.
+- `tmp/uploads/`: temporary upload chunks used only while a file is being completed.
+
+Core data collections:
+
+- `users`
+- `categories`
+- `resources`
+- `uploadBatches`
+- `loginSessions`
+- `readingSessions`
+- `accessEvents`
+- `skippedUploads`
 
 ## Environment Variables
 
@@ -87,7 +215,11 @@ GOOGLE_CLIENT_SECRET
 GOOGLE_REDIRECT_URI
 ```
 
-`ADMIN_BOOTSTRAP_PASSWORD`, OAuth secrets, AWS keys, and API keys must stay in Vercel environment variables. Do not commit them to GitHub.
+Important:
+
+- Never commit real secrets to GitHub.
+- Never place AWS keys, GitHub tokens, Vercel tokens, admin passwords, OAuth secrets, or API keys in frontend files.
+- Production should show `storageProvider: aws-s3` from `/api/config`.
 
 ## Local Development
 
@@ -101,16 +233,22 @@ Then open:
 
 On this Windows workspace, `START-AGBS-LIBRARY.cmd` can also start the local server.
 
-## Security Notes
+## Current Plan
 
-- Secrets are kept out of the repository.
-- Students cannot upload resources.
-- Admin-only routes are protected server-side.
-- Resources are served through authenticated app routes.
-- Browser-level screenshots or copying cannot be fully prevented, but ordinary public download exposure is avoided.
+1. Use Vercel only for the web app and API.
+2. Use AWS S3 for all permanent files and JSON records.
+3. Keep the site branding aligned with the seminary logo.
+4. Keep uploads automated: no manual publish button.
+5. Keep student uploads disabled.
+6. Upload books from the admin dashboard in batches.
+7. Watch the admin storage panel after uploads.
+8. Use skipped duplicate records to clean repeated files.
+9. Use classification exports for library cataloging and bibliography reports.
+10. Configure Google OAuth later if Gmail sign-in is required.
+11. Add deeper PDF/EPUB page-location tracking later if needed.
 
 ## Handover Document
 
-For a fuller project summary and continuation notes, see:
+For the fuller project plan and continuation notes, see:
 
 [AGBS_LIBRARY_PROJECT_DOCUMENT.md](AGBS_LIBRARY_PROJECT_DOCUMENT.md)

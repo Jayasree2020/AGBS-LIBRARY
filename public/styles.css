@@ -1,13 +1,16 @@
 :root {
-  --ink: #17202a;
-  --muted: #607080;
-  --line: #d9e0e6;
+  --ink: #2b1a12;
+  --muted: #755b4b;
+  --line: #ead6b4;
   --panel: #ffffff;
-  --wash: #f3f6f8;
-  --brand: #0d6b61;
-  --brand-strong: #084d47;
+  --wash: #fff8ec;
+  --brand: #b8170f;
+  --brand-strong: #871008;
+  --gold: #f2b933;
+  --gold-soft: #fff0c8;
+  --flame: #ef6b1f;
   --warn: #8a4b00;
-  --bad: #a4262c;
+  --bad: #b8170f;
 }
 
 * {
@@ -18,7 +21,9 @@ body {
   margin: 0;
   font-family: Arial, Helvetica, sans-serif;
   color: var(--ink);
-  background: var(--wash);
+  background:
+    linear-gradient(180deg, rgba(255, 240, 200, 0.72), rgba(255, 248, 236, 0.96) 260px),
+    var(--wash);
 }
 
 button,
@@ -29,7 +34,7 @@ select {
 
 button {
   border: 0;
-  background: var(--brand);
+  background: linear-gradient(180deg, #d51d12, var(--brand));
   color: #fff;
   padding: 10px 14px;
   border-radius: 6px;
@@ -43,14 +48,15 @@ button {
   min-height: 38px;
   padding: 10px 14px;
   border-radius: 6px;
-  background: var(--brand);
+  background: linear-gradient(180deg, #d51d12, var(--brand));
   color: #fff;
   text-decoration: none;
 }
 
 button.secondary {
-  background: #e8eef1;
+  background: #fff0c8;
   color: var(--ink);
+  border: 1px solid #e7bd62;
 }
 
 button.danger {
@@ -69,6 +75,12 @@ select {
   border-radius: 6px;
   padding: 10px 12px;
   background: #fff;
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid rgba(242, 185, 51, 0.46);
+  border-color: var(--gold);
 }
 
 label {
@@ -98,16 +110,29 @@ label {
   justify-content: space-between;
   gap: 16px;
   padding: 14px 24px;
-  background: #fff;
-  border-bottom: 1px solid var(--line);
+  background: rgba(255, 250, 241, 0.96);
+  border-bottom: 1px solid #e2b95f;
+  box-shadow: 0 4px 18px rgba(135, 16, 8, 0.08);
   position: sticky;
   top: 0;
   z-index: 5;
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   font-weight: 700;
   color: var(--brand-strong);
+}
+
+.brand img {
+  width: 42px;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 2px solid var(--gold);
+  background: #fff;
 }
 
 .nav {
@@ -126,7 +151,8 @@ label {
 
 .nav a.active,
 .nav a:hover {
-  background: #e6f2f0;
+  background: #fff0c8;
+  color: var(--brand-strong);
 }
 
 .page {
@@ -140,6 +166,9 @@ label {
   display: grid;
   place-items: center;
   padding: 24px;
+  background:
+    radial-gradient(circle at 50% 12%, rgba(242, 185, 51, 0.32), transparent 280px),
+    linear-gradient(180deg, #fff3d3, #fff8ec 52%, #ffffff);
 }
 
 .login-card,
@@ -153,6 +182,25 @@ label {
 .login-card {
   width: min(440px, 100%);
   padding: 26px;
+  border-top: 5px solid var(--brand);
+  box-shadow: 0 18px 48px rgba(135, 16, 8, 0.12);
+}
+
+.login-brand {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.login-brand img {
+  width: 118px;
+  height: 118px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 3px solid var(--gold);
+  background: #fff;
+  box-shadow: 0 10px 26px rgba(135, 16, 8, 0.16);
 }
 
 .login-card h1,
@@ -222,14 +270,14 @@ label {
 }
 
 .stat-total {
-  border-color: #9fcac4;
-  background: #eef8f6;
+  border-color: #e7bd62;
+  background: #fff0c8;
 }
 
 .storage-meter {
   height: 10px;
   overflow: hidden;
-  background: #d9e0e6;
+  background: #f2dfbd;
   border-radius: 999px;
   margin: -10px 0 10px;
 }
@@ -238,7 +286,7 @@ label {
   display: block;
   height: 100%;
   min-width: 2px;
-  background: var(--brand);
+  background: linear-gradient(90deg, var(--brand), var(--flame), var(--gold));
 }
 
 .toolbar {
@@ -275,7 +323,7 @@ label {
 
 .searchbar {
   align-items: end;
-  background: #fff;
+  background: #fffaf1;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 14px;
@@ -286,7 +334,7 @@ label {
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #f8fafb;
+  background: #fffaf1;
   color: var(--muted);
   font-size: 13px;
 }
@@ -314,11 +362,11 @@ label {
   gap: 14px;
   width: min(460px, calc(100vw - 36px));
   padding: 14px;
-  background: #fff;
+  background: #fffaf1;
   border: 1px solid var(--line);
   border-left: 5px solid var(--brand);
   border-radius: 8px;
-  box-shadow: 0 12px 34px rgba(16, 32, 44, 0.16);
+  box-shadow: 0 12px 34px rgba(135, 16, 8, 0.16);
 }
 
 .upload-dock div {
@@ -341,9 +389,9 @@ label {
   display: grid;
   gap: 6px;
   padding: 12px;
-  border: 1px solid #9fcac4;
+  border: 1px solid #e7bd62;
   border-radius: 8px;
-  background: #eef8f6;
+  background: #fff0c8;
 }
 
 .temp-password span {
@@ -372,7 +420,7 @@ label {
   width: fit-content;
   border-radius: 999px;
   padding: 4px 9px;
-  background: #e8eef1;
+  background: #fff0c8;
   color: var(--muted);
   font-size: 12px;
   text-transform: uppercase;
@@ -384,8 +432,8 @@ label {
 }
 
 .badge.published {
-  background: #dff3e9;
-  color: #176441;
+  background: #fff0c8;
+  color: var(--brand-strong);
 }
 
 .table {
@@ -433,7 +481,7 @@ label {
   justify-content: space-between;
   gap: 10px;
   padding: 8px 12px;
-  background: #fff;
+  background: #fffaf1;
   border-bottom: 1px solid var(--line);
 }
 
@@ -471,7 +519,7 @@ label {
   min-height: 0;
   display: grid;
   grid-template-rows: 1fr;
-  background: #edf1f4;
+  background: #f5e8d4;
 }
 
 .pdf-controls {
@@ -507,7 +555,7 @@ label {
   max-width: 100%;
   height: auto;
   background: #fff;
-  box-shadow: 0 2px 16px rgba(23, 32, 42, 0.18);
+  box-shadow: 0 2px 16px rgba(135, 16, 8, 0.18);
 }
 
 .notice {
