@@ -508,6 +508,14 @@ function json(res, status, value) {
   send(res, status, JSON.stringify(value), { "Content-Type": "application/json; charset=utf-8" });
 }
 
+function download(res, filename, contentType, body) {
+  send(res, 200, body, {
+    "Content-Type": contentType,
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Cache-Control": "private, no-store"
+  });
+}
+
 async function bodyJson(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -638,15 +646,20 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
     if (typeof db.saveFile === "function") {
       await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
     }
-    const title = path.basename(file.filename, extension).replace(/[_-]+/g, " ").trim();
+    const title = inferTitle(file.filename);
+    const author = inferAuthor(file.filename);
+    const classification = classifyResource({ title, originalFilename: file.filename, category });
     saved.push(await db.insert("resources", {
       title,
-      author: "",
+      author,
       format: extension.slice(1),
+      resourceType: "E-book",
       originalFilename: file.filename,
       storageName,
       categoryId: category?.id || "",
       suggestedCategory: suggested || category?.name || "",
+      classification,
+      bibliography: buildBibliography({ title, author, format: extension.slice(1), originalFilename: file.filename, category, classification }),
       uploadMode: autoCategorize ? "auto" : "category",
       status: "published",
       uploadBatchId: batch.id,
@@ -727,6 +740,194 @@ function resourceDuplicateKey(resource) {
   return uploadDuplicateKey(resource.originalFilename || resource.title, resource.metadata?.size);
 }
 
+function inferAuthor(filename) {
+  const base = path.basename(String(filename || ""), path.extname(String(filename || ""))).replace(/[_]+/g, " ").trim();
+  const match = base.match(/^(.{2,80}?)\s+-\s+(.{2,160})$/);
+  return match ? match[1].trim() : "";
+}
+
+function inferTitle(filename) {
+  const base = path.basename(String(filename || ""), path.extname(String(filename || ""))).replace(/[_-]+/g, " ").trim();
+  const match = base.match(/^(.{2,80}?)\s+-\s+(.{2,160})$/);
+  return (match ? match[2] : base).trim();
+}
+
+const deweyRules = [
+  { number: "221", label: "Old Testament", keywords: ["old testament", "genesis", "exodus", "leviticus", "numbers", "deuteronomy", "joshua", "judges", "samuel", "kings", "chronicles", "ezra", "nehemiah", "esther", "job", "psalms", "proverbs", "ecclesiastes", "isaiah", "jeremiah", "ezekiel", "daniel", "hosea", "amos", "jonah", "micah", "malachi"] },
+  { number: "225", label: "New Testament", keywords: ["new testament", "matthew", "mark", "luke", "john", "acts", "romans", "corinthians", "galatians", "ephesians", "philippians", "colossians", "thessalonians", "timothy", "titus", "philemon", "hebrews", "james", "peter", "jude", "revelation"] },
+  { number: "230", label: "Christian Theology", keywords: ["christian theology", "theology", "doctrine", "systematic", "christology", "trinity", "atonement", "soteriology", "pneumatology", "ecclesiology", "eschatology"] },
+  { number: "241", label: "Christian Ethics", keywords: ["christian ethics", "ethics", "moral", "morality", "justice", "virtue"] },
+  { number: "253", label: "Christian Ministry", keywords: ["christian ministry", "ministry", "pastoral", "preaching", "homiletics", "worship", "discipleship", "leadership", "counseling", "counselling"] },
+  { number: "266", label: "Missiology", keywords: ["missiology", "mission", "missions", "evangelism", "church planting", "cross cultural"] },
+  { number: "270", label: "History of Christianity", keywords: ["history of christianity", "church history", "christian history", "reformation", "patristic", "medieval church", "early church"] },
+  { number: "200", label: "Religions", keywords: ["religions", "religion", "hinduism", "islam", "buddhism", "sikhism", "tribal religion", "comparative religion"] },
+  { number: "261.8", label: "Social Analysis", keywords: ["social analysis", "society", "social", "dalit", "tribal", "poverty", "politics", "economics", "liberation", "human rights"] },
+  { number: "302.2", label: "Communication", keywords: ["communication", "media", "journalism", "public speaking", "language", "rhetoric"] },
+  { number: "305.42", label: "Women Studies", keywords: ["women studies", "women", "woman", "gender", "feminist", "feminism"] }
+];
+
+function classifyResource({ title, originalFilename, category }) {
+  const text = normalizeCategoryText(`${category?.name || ""} ${title || ""} ${originalFilename || ""}`);
+  let best = null;
+  for (const rule of deweyRules) {
+    let score = 0;
+    for (const keyword of rule.keywords) {
+      if (text.includes(normalizeCategoryText(keyword))) score += keyword.includes(" ") ? 3 : 1;
+    }
+    if (!best || score > best.score) best = { ...rule, score };
+  }
+  if (!best || best.score === 0) best = { number: "200", label: "Religion", score: 0 };
+  return {
+    system: "Dewey Decimal Classification",
+    number: best.number,
+    label: best.label,
+    source: best.score > 0 ? "Automatic category and filename match" : "Automatic general religion fallback",
+    confidence: best.score >= 3 ? "high" : best.score > 0 ? "medium" : "low"
+  };
+}
+
+function buildBibliography({ title, author, format, originalFilename, category, classification }) {
+  const cleanTitle = title || path.basename(originalFilename || "Untitled", path.extname(originalFilename || ""));
+  const authorPart = author ? `${author}. ` : "";
+  const categoryPart = category?.name ? ` ${category.name}.` : "";
+  return `${authorPart}${cleanTitle}. E-book, ${String(format || "").toUpperCase()}.${categoryPart} Dewey ${classification?.number || "200"} ${classification?.label || "Religion"}.`;
+}
+
+function exportRows(resources, categories) {
+  return resources
+    .slice()
+    .sort((a, b) => String(a.title || a.originalFilename || "").localeCompare(String(b.title || b.originalFilename || "")))
+    .map((resource, index) => {
+      const item = classifiedResource(resource, categories);
+      return {
+        no: index + 1,
+        title: item.title,
+        author: item.author || "",
+        type: item.resourceType || "E-book",
+        format: String(item.format || "").toUpperCase(),
+        category: item.categoryName,
+        deweyNumber: item.classification?.number || "",
+        deweyClass: item.classification?.label || "",
+        confidence: item.classification?.confidence || "",
+        bibliography: item.bibliography || "",
+        filename: item.originalFilename || ""
+      };
+    });
+}
+
+function escapeCsv(value) {
+  const text = String(value ?? "");
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function exportCsv(rows) {
+  const headers = ["No", "Title", "Author", "Type", "Format", "Category", "Dewey Number", "Dewey Class", "Confidence", "Bibliography", "Filename"];
+  const keys = ["no", "title", "author", "type", "format", "category", "deweyNumber", "deweyClass", "confidence", "bibliography", "filename"];
+  return [headers.map(escapeCsv).join(","), ...rows.map((row) => keys.map((key) => escapeCsv(row[key])).join(","))].join("\r\n");
+}
+
+function exportHtml(rows) {
+  const bodyRows = rows.map((row) => `
+    <tr>
+      <td>${row.no}</td>
+      <td>${escapeHtml(row.title)}</td>
+      <td>${escapeHtml(row.author)}</td>
+      <td>${escapeHtml(row.type)}</td>
+      <td>${escapeHtml(row.category)}</td>
+      <td>${escapeHtml(row.deweyNumber)}</td>
+      <td>${escapeHtml(row.deweyClass)}</td>
+      <td>${escapeHtml(row.bibliography)}</td>
+    </tr>
+  `).join("");
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AGBS Library Classification and Bibliography</title>
+  <style>
+    body { font-family: Arial, sans-serif; color: #17202a; }
+    h1 { color: #084d47; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid #d9e0e6; padding: 6px; vertical-align: top; text-align: left; }
+    th { background: #eef8f6; }
+  </style>
+</head>
+<body>
+  <h1>AGBS Library Classification and Bibliography</h1>
+  <p>Generated ${new Date().toLocaleString("en-IN")}.</p>
+  <table>
+    <thead><tr><th>No</th><th>Title</th><th>Author</th><th>Type</th><th>Category</th><th>Dewey No.</th><th>Dewey Class</th><th>Bibliography</th></tr></thead>
+    <tbody>${bodyRows}</tbody>
+  </table>
+</body>
+</html>`;
+}
+
+function exportPdf(rows) {
+  const lines = ["AGBS Library Classification and Bibliography", `Generated ${new Date().toLocaleString("en-IN")}`, ""];
+  for (const row of rows) {
+    lines.push(`${row.no}. ${row.title}`);
+    if (row.author) lines.push(`   Author: ${row.author}`);
+    lines.push(`   ${row.type} | ${row.category} | Dewey ${row.deweyNumber} ${row.deweyClass}`);
+    lines.push(`   ${row.bibliography}`);
+    lines.push("");
+  }
+  return simplePdf(lines);
+}
+
+function simplePdf(lines) {
+  const objects = ["", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+  const pageIds = [];
+  const perPage = 42;
+  const escaped = (value) => String(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  for (let pageIndex = 0; pageIndex < Math.max(1, Math.ceil(lines.length / perPage)); pageIndex++) {
+    const pageLines = lines.slice(pageIndex * perPage, (pageIndex + 1) * perPage);
+    let y = 760;
+    const content = ["BT", "/F1 10 Tf", "50 780 Td"];
+    for (const line of pageLines) {
+      content.push(`1 0 0 1 50 ${y} Tm (${escaped(line).slice(0, 120)}) Tj`);
+      y -= 17;
+    }
+    content.push("ET");
+    const contentId = objects.length + 1;
+    objects.push(`<< /Length ${Buffer.byteLength(content.join("\n"))} >>\nstream\n${content.join("\n")}\nendstream`);
+    const pageId = objects.length + 1;
+    pageIds.push(pageId);
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
+  }
+  objects[0] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[1] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
+  const ordered = objects.map((object, index) => `${index + 1} 0 obj\n${object}\nendobj\n`);
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const object of ordered) {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += object;
+  }
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${ordered.length + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i < offsets.length; i++) pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${ordered.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return Buffer.from(pdf, "binary");
+}
+
+function classifiedResource(resource, categories) {
+  const category = categories.find((item) => item.id === resource.categoryId) || null;
+  const title = resource.title || path.basename(resource.originalFilename || "Untitled", path.extname(resource.originalFilename || ""));
+  const author = resource.author || inferAuthor(resource.originalFilename || title);
+  const classification = resource.classification || classifyResource({ title, originalFilename: resource.originalFilename, category });
+  const bibliography = resource.bibliography || buildBibliography({ title, author, format: resource.format, originalFilename: resource.originalFilename, category, classification });
+  return {
+    ...resource,
+    title,
+    author,
+    resourceType: resource.resourceType || "E-book",
+    categoryName: category?.name || "",
+    classification,
+    bibliography
+  };
+}
+
 async function recordSkippedUpload({ file, reason, user, batch, hash }) {
   return await db.insert("skippedUploads", {
     filename: file.filename,
@@ -753,13 +954,21 @@ async function replaceResourceFile(resource, file, user) {
   await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
   if (typeof db.saveFile === "function") await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
   await removeStoredFile(resource.storageName);
-  const title = path.basename(file.filename, extension).replace(/[_-]+/g, " ").trim();
+  const title = inferTitle(file.filename);
+  const author = inferAuthor(file.filename);
+  const categories = await db.all("categories");
+  const category = categories.find((item) => item.id === resource.categoryId) || null;
+  const classification = classifyResource({ title, originalFilename: file.filename, category });
   return await db.update("resources", resource.id, {
     title,
+    author,
     format: extension.slice(1),
+    resourceType: "E-book",
     originalFilename: file.filename,
     storageName,
     status: "published",
+    classification,
+    bibliography: buildBibliography({ title, author, format: extension.slice(1), originalFilename: file.filename, category, classification }),
     updatedBy: user.id,
     inlineContent: shouldInlineFiles() && file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
     metadata: { size: file.content.length, contentType: file.contentType, hash }
@@ -973,14 +1182,15 @@ async function routeApi(req, res, url) {
       if (category && item.categoryId !== category) return false;
       if (terms.length) {
         const resourceCategory = categories.find((entry) => entry.id === item.categoryId);
-        const haystack = `${item.title || ""} ${item.author || ""} ${item.format || ""} ${item.originalFilename || ""} ${resourceCategory?.name || ""}`.toLowerCase();
+        const classified = classifiedResource(item, categories);
+        const haystack = `${classified.title || ""} ${classified.author || ""} ${classified.format || ""} ${classified.originalFilename || ""} ${resourceCategory?.name || ""} ${classified.classification?.number || ""} ${classified.classification?.label || ""} ${classified.bibliography || ""}`.toLowerCase();
         if (!terms.every((term) => haystack.includes(term))) return false;
       }
       return true;
     });
     if (sort === "recent") resources = resources.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
     if (limit) resources = resources.slice(0, limit);
-    return json(res, 200, { resources: resources.map(publicResource) });
+    return json(res, 200, { resources: resources.map((resource) => publicResource(classifiedResource(resource, categories))) });
   }
 
   if (req.method === "GET" && url.pathname === "/api/resources-summary") {
@@ -995,8 +1205,21 @@ async function routeApi(req, res, url) {
       .slice()
       .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
       .slice(0, 25)
-      .map(publicResource);
+      .map((resource) => publicResource(classifiedResource(resource, categories)));
     return json(res, 200, { counts, recentResources });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/catalog-export") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const format = String(url.searchParams.get("format") || "html").toLowerCase();
+    const categories = await db.all("categories");
+    const rows = exportRows(await db.all("resources"), categories);
+    const stamp = new Date().toISOString().slice(0, 10);
+    if (format === "csv") return download(res, `agbs-classification-bibliography-${stamp}.csv`, "text/csv; charset=utf-8", exportCsv(rows));
+    if (format === "xls") return download(res, `agbs-classification-bibliography-${stamp}.xls`, "application/vnd.ms-excel; charset=utf-8", exportHtml(rows));
+    if (format === "doc") return download(res, `agbs-classification-bibliography-${stamp}.doc`, "application/msword; charset=utf-8", exportHtml(rows));
+    if (format === "pdf") return download(res, `agbs-classification-bibliography-${stamp}.pdf`, "application/pdf", exportPdf(rows));
+    return download(res, `agbs-classification-bibliography-${stamp}.html`, "text/html; charset=utf-8", exportHtml(rows));
   }
 
   if (req.method === "GET" && url.pathname === "/api/storage-usage") {
@@ -1025,7 +1248,8 @@ async function routeApi(req, res, url) {
     const id = url.pathname.split("/").pop();
     const resource = await db.findOne("resources", (item) => item.id === id && (item.status === "published" || isStaff(user)));
     if (!resource) return json(res, 404, { error: "Resource not found." });
-    return json(res, 200, { resource: publicResource(resource) });
+    const categories = await db.all("categories");
+    return json(res, 200, { resource: publicResource(classifiedResource(resource, categories)) });
   }
 
   if (req.method === "POST" && url.pathname === "/api/resources/upload") {
@@ -1168,8 +1392,19 @@ async function routeApi(req, res, url) {
     if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
     const id = url.pathname.split("/").pop();
     const body = await bodyJson(req);
+    const existing = await db.findOne("resources", (item) => item.id === id);
+    if (!existing) return json(res, 404, { error: "Resource not found." });
     const patch = {};
     for (const key of ["title", "author", "categoryId", "status"]) if (body[key] !== undefined) patch[key] = body[key];
+    if (patch.title !== undefined || patch.author !== undefined || patch.categoryId !== undefined) {
+      const categories = await db.all("categories");
+      const next = { ...existing, ...patch };
+      const category = categories.find((item) => item.id === next.categoryId) || null;
+      patch.classification = classifyResource({ title: next.title, originalFilename: next.originalFilename, category });
+      patch.bibliography = buildBibliography({ title: next.title, author: next.author, format: next.format, originalFilename: next.originalFilename, category, classification: patch.classification });
+      const updated = await db.update("resources", id, patch);
+      return json(res, 200, { resource: publicResource(classifiedResource(updated, categories)) });
+    }
     return json(res, 200, { resource: publicResource(await db.update("resources", id, patch)) });
   }
 

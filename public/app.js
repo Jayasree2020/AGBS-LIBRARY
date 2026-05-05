@@ -616,13 +616,23 @@ async function adminPage() {
       </section>
       <h2>AWS storage</h2>
       <div id="storageUsageSummary">${storageUsageSummary()}</div>
+      <div class="section-heading">
+        <h2>Classification exports</h2>
+        <div class="button-row export-buttons">
+          <a class="button-link" href="/api/catalog-export?format=html" target="_blank" rel="noreferrer">HTML</a>
+          <a class="button-link" href="/api/catalog-export?format=doc">Word</a>
+          <a class="button-link" href="/api/catalog-export?format=xls">Excel</a>
+          <a class="button-link" href="/api/catalog-export?format=csv">CSV</a>
+          <a class="button-link" href="/api/catalog-export?format=pdf">PDF</a>
+        </div>
+      </div>
       <h2>Book count</h2>
       <div id="bookCountSummary">${bookCountSummary()}</div>
       <div class="section-heading">
         <h2>Recently added or updated books</h2>
       </div>
       <table class="table" id="resourceReviewTable">
-        <thead><tr><th>Title</th><th>Category</th><th>Format</th><th>Action</th></tr></thead>
+        <thead><tr><th>Title</th><th>Category</th><th>Dewey</th><th>Format</th><th>Action</th></tr></thead>
         <tbody>${resourceRowsHtml()}</tbody>
       </table>
       <h2>Skipped duplicate uploads</h2>
@@ -688,10 +698,12 @@ function bookCountSummary() {
 }
 
 function adminResourceRow(resource) {
+  const classification = resource.classification || {};
   return `
     <tr>
       <td><input data-title="${resource.id}" value="${escapeAttr(resource.title)}"></td>
       <td><select data-category="${resource.id}">${state.categories.map((category) => `<option value="${category.id}" ${category.id === resource.categoryId ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("")}</select></td>
+      <td><strong>${escapeHtml(classification.number || "")}</strong><br><span class="subtle">${escapeHtml(classification.label || "")}</span></td>
       <td><span class="badge published">${escapeHtml(resource.format)}</span></td>
       <td>
         <button class="secondary" data-save="${resource.id}">Save</button>
@@ -930,7 +942,7 @@ function resourceRowsHtml() {
     .slice()
     .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
     .slice(0, 25);
-  return resources.length ? resources.map(adminResourceRow).join("") : `<tr><td colspan="4">No uploaded resources yet.</td></tr>`;
+  return resources.length ? resources.map(adminResourceRow).join("") : `<tr><td colspan="5">No uploaded resources yet.</td></tr>`;
 }
 
 function refreshSkippedUploadsTable() {

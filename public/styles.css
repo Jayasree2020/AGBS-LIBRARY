@@ -36,6 +36,18 @@ button {
   cursor: pointer;
 }
 
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--brand);
+  color: #fff;
+  text-decoration: none;
+}
+
 button.secondary {
   background: #e8eef1;
   color: var(--ink);

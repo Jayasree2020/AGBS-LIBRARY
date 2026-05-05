@@ -14,6 +14,9 @@ Fallback Vercel URL: [https://agbs-library.vercel.app](https://agbs-library.verc
 - Supports PDF, EPUB, PNG, JPG, JPEG, WEBP, and GIF files.
 - Suggests categories from file and folder names.
 - Adds uploaded resources directly to the library after upload.
+- Classifies uploaded e-books with an automatic Dewey Decimal-style class.
+- Generates a bibliography entry for each uploaded e-book.
+- Lets admins export classification and bibliography reports as HTML, Word, Excel, CSV, or PDF.
 - Skips duplicate files automatically and shows skipped files only to admins.
 - Lets admins view, save/update metadata, replace, and remove uploaded files.
 - Tracks login sessions, reading sessions, opened books, and reading time.
@@ -41,6 +44,8 @@ Admins can upload normal files, a ZIP archive, or a full folder. The upload scre
 - `Manual category`: the whole upload batch goes into one selected department.
 
 Uploaded resources are published automatically and appear immediately in the student library list. Duplicate files are skipped instead of being added again. Admins can review skipped files in the admin dashboard and re-upload only when needed.
+
+Each uploaded file is treated as an e-book. The app automatically assigns a Dewey Decimal-style number from the file name, folder name, and selected category, then generates a bibliography entry. Admins can download the full classification and bibliography report from the admin dashboard.
 
 Admins can manage files after upload:
 

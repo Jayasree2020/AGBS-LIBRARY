@@ -105,6 +105,8 @@ When uploading, the app checks every file and does the following:
 
 - Supported new files are added directly to the library.
 - Files are automatically marked as published.
+- Files are treated as e-books and receive automatic Dewey Decimal-style classification.
+- A bibliography entry is generated for every e-book.
 - Duplicate files are skipped.
 - Skipped files are shown only to admins under `Skipped duplicate uploads`.
 - Large uploads are internally sent in smaller chunks, but the final library record remains the real PDF/EPUB/image file, not a chunk or part.
@@ -213,6 +215,7 @@ Never place real values for these in GitHub or frontend files.
 
 - Uploads go directly to the library.
 - Admin dashboard shows only total storage left and estimated month runway.
+- Admin dashboard includes classification and bibliography export buttons for HTML, Word-compatible, Excel-compatible, CSV, and PDF files.
 - No publish button is required.
 - Duplicate files are skipped.
 - Skipped duplicates are admin-only.
