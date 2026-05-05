@@ -1196,6 +1196,7 @@ async function routeApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/resources-summary") {
     if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
     const resources = await db.all("resources");
+    const categories = await db.all("categories");
     const counts = resources.reduce((result, resource) => {
       result.total += 1;
       result.byCategory[resource.categoryId || ""] = (result.byCategory[resource.categoryId || ""] || 0) + 1;
