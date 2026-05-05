@@ -36,11 +36,39 @@ function isZipFile(file) {
   return (file.webkitRelativePath || file.name || "").toLowerCase().endsWith(".zip");
 }
 
+function uploadFilename(file) {
+  return file.libraryPath || file.webkitRelativePath || file.name;
+}
+
+function isSupportedLibraryFile(name) {
+  return /\.(pdf|epub|png|jpe?g|webp|gif)$/i.test(String(name || ""));
+}
+
+function mimeForFilename(name) {
+  const lower = String(name || "").toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".epub")) return "application/epub+zip";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return "application/octet-stream";
+}
+
+let jsZipLoader = null;
+
+async function loadJsZip() {
+  if (!jsZipLoader) {
+    jsZipLoader = import("https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm").then((module) => module.default || module.JSZip);
+  }
+  return await jsZipLoader;
+}
+
 async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, label = "Uploading") {
   const uploadId = crypto.randomUUID();
   state.activeUpload = { ...(state.activeUpload || {}), uploadId };
   const chunkSize = 1024 * 1024;
-  const filename = file.webkitRelativePath || file.name;
+  const filename = uploadFilename(file);
   const metadata = {
     fileIndex: 0,
     filename,
@@ -91,44 +119,52 @@ async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgres
 }
 
 async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, onEntrySaved, signal) {
-  let uploadId = "";
   const totals = { resources: [], skipped: [], failed: [] };
-  try {
-    const sent = await sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, "Uploading ZIP");
-    uploadId = sent.uploadId;
-    onProgress(`Opening ZIP ${sent.metadata.filename}...`);
-    const started = await api("/api/resources/upload-zip-start", {
-      method: "POST",
-      body: { uploadId, file: sent.metadata, autoCategorize: options.autoCategorize, targetCategoryId: options.targetCategoryId },
-      signal
-    });
-    for (let entryIndex = 0; entryIndex < started.totalEntries; entryIndex++) {
-      if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
-      onProgress(`Saving ZIP entry ${entryIndex + 1} of ${started.totalEntries} from ${sent.metadata.filename}...`);
-      try {
-        const data = await api("/api/resources/upload-zip-entry", {
-          method: "POST",
-          body: { uploadId, batchId: started.batchId, entryIndex, autoCategorize: options.autoCategorize, targetCategoryId: options.targetCategoryId },
-          signal
-        });
-        const addedResources = Array.isArray(data.resources) ? data.resources : [];
-        const skipped = Array.isArray(data.skipped) ? data.skipped : [];
-        totals.resources.push(...addedResources);
-        totals.skipped.push(...skipped);
-        onEntrySaved?.({ ...data, progressLabel: `ZIP ${sent.metadata.filename}: ${entryIndex + 1} of ${started.totalEntries} entries checked.` }, fileIndex + 1, totalFiles);
-      } catch (error) {
-        if (error.name === "AbortError") throw error;
-        const failed = { filename: `${sent.metadata.filename} entry ${entryIndex + 1}`, reason: error.message };
-        totals.failed.push(failed);
-        onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${sent.metadata.filename}: ${entryIndex + 1} of ${started.totalEntries} entries checked.` }, fileIndex + 1, totalFiles);
-      }
-    }
-    await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId } }).catch(() => {});
-    return totals;
-  } catch (error) {
-    if (uploadId) await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId } }).catch(() => {});
-    throw error;
+  const zipName = uploadFilename(file);
+  if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
+  onProgress(`Opening ZIP ${zipName} in the browser...`);
+  const JSZip = await loadJsZip();
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const entries = Object.values(zip.files).filter((entry) => !entry.dir);
+  const supportedEntries = entries.filter((entry) => isSupportedLibraryFile(entry.name));
+  const unsupportedEntries = entries.filter((entry) => !isSupportedLibraryFile(entry.name));
+  for (const entry of unsupportedEntries) {
+    const skipped = { filename: entry.name, reason: "Unsupported file type inside ZIP" };
+    totals.skipped.push(skipped);
+    onEntrySaved?.({ resources: [], skipped: [skipped], failed: [], progressLabel: `ZIP ${zipName}: skipped unsupported file ${entry.name}.` }, fileIndex + 1, totalFiles);
   }
+  if (!supportedEntries.length) {
+    const failed = { filename: zipName, reason: "No supported PDF, EPUB, or image files were found inside this ZIP." };
+    totals.failed.push(failed);
+    onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${zipName}: no supported files found.` }, fileIndex + 1, totalFiles);
+    return totals;
+  }
+  for (let entryIndex = 0; entryIndex < supportedEntries.length; entryIndex++) {
+    if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
+    const entry = supportedEntries[entryIndex];
+    onProgress(`Extracting ZIP file ${entryIndex + 1} of ${supportedEntries.length}: ${entry.name}`);
+    try {
+      const blob = await entry.async("blob");
+      const extracted = new File([blob], entry.name.split("/").pop() || entry.name, {
+        type: blob.type || mimeForFilename(entry.name)
+      });
+      extracted.libraryPath = entry.name;
+      const data = await uploadChunkedFile(extracted, entryIndex, supportedEntries.length, options, onProgress, signal);
+      const addedResources = Array.isArray(data.resources) ? data.resources : [];
+      const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+      const failed = Array.isArray(data.failed) ? data.failed : [];
+      totals.resources.push(...addedResources);
+      totals.skipped.push(...skipped);
+      totals.failed.push(...failed);
+      onEntrySaved?.({ ...data, progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.` }, fileIndex + 1, totalFiles);
+    } catch (error) {
+      if (error.name === "AbortError") throw error;
+      const failed = { filename: entry.name, reason: error.message };
+      totals.failed.push(failed);
+      onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.` }, fileIndex + 1, totalFiles);
+    }
+  }
+  return totals;
 }
 
 async function uploadChunked(files, options, onProgress, onFileSaved, signal) {
@@ -153,7 +189,7 @@ async function uploadChunked(files, options, onProgress, onFileSaved, signal) {
       onFileSaved?.(data, fileIndex + 1, files.length);
     } catch (error) {
       if (error.name === "AbortError") throw error;
-      const filename = files[fileIndex].webkitRelativePath || files[fileIndex].name;
+      const filename = uploadFilename(files[fileIndex]);
       totals.failed.push({ filename, reason: error.message });
       onFileSaved?.({ resources: [], skipped: [], failed: [{ filename, reason: error.message }] }, fileIndex + 1, files.length);
     }
@@ -864,9 +900,9 @@ function wireAdmin() {
         form.append("autoCategorize", String(options.autoCategorize));
         form.append("targetCategoryId", options.targetCategoryId);
         for (const file of files) {
-          form.append("files", file, file.webkitRelativePath || file.name);
+          form.append("files", file, uploadFilename(file));
         }
-        files.forEach((file) => addUploadLog(`Uploading ${file.webkitRelativePath || file.name}`));
+        files.forEach((file) => addUploadLog(`Uploading ${uploadFilename(file)}`));
         data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal });
       }
       const skippedCount = data.skipped?.length || 0;

@@ -110,6 +110,7 @@ When uploading, the app checks every file and does the following:
 - Duplicate files are skipped.
 - Skipped files are shown only to admins under `Skipped duplicate uploads`.
 - Large uploads are internally sent in smaller chunks, but the final library record remains the real PDF/EPUB/image file, not a chunk or part.
+- ZIP uploads are opened in the browser and each supported file inside the ZIP is uploaded to AWS as its own library item.
 
 ## Duplicate Handling
 

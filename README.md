@@ -54,7 +54,7 @@ Admins can manage files after upload:
 - `Replace`: upload a new file in place of an existing file.
 - `Remove`: delete the library record and stored file.
 
-Large uploads are sent in smaller internal chunks so Vercel can receive them safely. The finished library item is still the original PDF, EPUB, or image file, not a visible chunk or part.
+Large uploads are sent in smaller internal chunks so Vercel can receive them safely. ZIP uploads are opened in the browser and each PDF/EPUB/image inside the ZIP is uploaded as its own finished library file. The finished library item is still the original PDF, EPUB, or image file, not a visible chunk or part.
 
 ## Deployment
 
