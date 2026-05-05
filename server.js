@@ -107,6 +107,17 @@ class JsonStore {
     return full;
   }
 
+  async insertMany(collection, recordsToInsert) {
+    const items = Array.isArray(recordsToInsert) ? recordsToInsert : [];
+    if (!items.length) return [];
+    const records = await this.all(collection);
+    const now = new Date().toISOString();
+    const full = items.map((record) => ({ id: crypto.randomUUID(), createdAt: now, updatedAt: now, ...record }));
+    records.push(...full);
+    await this.write(collection, records);
+    return full;
+  }
+
   async update(collection, id, patch) {
     const records = await this.all(collection);
     const index = records.findIndex((item) => item.id === id);
@@ -264,6 +275,17 @@ class ObjectStore {
     const now = new Date().toISOString();
     const full = { id: crypto.randomUUID(), createdAt: now, updatedAt: now, ...record };
     records.push(full);
+    await this.write(collection, records);
+    return full;
+  }
+
+  async insertMany(collection, recordsToInsert) {
+    const items = Array.isArray(recordsToInsert) ? recordsToInsert : [];
+    if (!items.length) return [];
+    const records = await this.all(collection);
+    const now = new Date().toISOString();
+    const full = items.map((record) => ({ id: crypto.randomUUID(), createdAt: now, updatedAt: now, ...record }));
+    records.push(...full);
     await this.write(collection, records);
     return full;
   }
@@ -622,8 +644,8 @@ async function zipEntryAt(buffer, index) {
 }
 
 async function saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch }) {
-  const saved = [];
-  const skipped = [];
+  const resourceRecords = [];
+  const skippedRecords = [];
   const existingResources = await db.all("resources");
   const seenKeys = new Set(existingResources.map(resourceDuplicateKey).filter(Boolean));
   const seenHashes = new Set(existingResources.map((resource) => resource.metadata?.hash).filter(Boolean));
@@ -632,11 +654,11 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
     const hash = fileHash(file.content);
     const duplicateKey = uploadDuplicateKey(file.filename, file.content.length);
     if (!allowedResourceExtensions.includes(extension)) {
-      skipped.push(await recordSkippedUpload({ file, reason: "Unsupported file type", user, batch, hash }));
+      skippedRecords.push(buildSkippedUpload({ file, reason: "Unsupported file type", user, batch, hash }));
       continue;
     }
     if (seenHashes.has(hash) || seenKeys.has(duplicateKey)) {
-      skipped.push(await recordSkippedUpload({ file, reason: "Duplicate file already exists in the library", user, batch, hash }));
+      skippedRecords.push(buildSkippedUpload({ file, reason: "Duplicate file already exists in the library", user, batch, hash }));
       continue;
     }
     const category = autoCategorize ? (categoryForFile(file.filename, categories) || selectedCategory) : selectedCategory;
@@ -649,7 +671,7 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
     const title = inferTitle(file.filename);
     const author = inferAuthor(file.filename);
     const classification = classifyResource({ title, originalFilename: file.filename, category });
-    saved.push(await db.insert("resources", {
+    resourceRecords.push({
       title,
       author,
       format: extension.slice(1),
@@ -666,10 +688,12 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       createdBy: user.id,
       inlineContent: shouldInlineFiles() && file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
       metadata: { size: file.content.length, contentType: file.contentType, hash }
-    }));
+    });
     seenHashes.add(hash);
     seenKeys.add(duplicateKey);
   }
+  const saved = typeof db.insertMany === "function" ? await db.insertMany("resources", resourceRecords) : [];
+  const skipped = typeof db.insertMany === "function" ? await db.insertMany("skippedUploads", skippedRecords) : [];
   return { saved, skipped };
 }
 
@@ -740,10 +764,28 @@ function resourceDuplicateKey(resource) {
   return uploadDuplicateKey(resource.originalFilename || resource.title, resource.metadata?.size);
 }
 
+function cleanAuthorName(value) {
+  const text = String(value || "").replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!text || text.length < 2 || text.length > 80) return "";
+  const lower = text.toLowerCase();
+  const subjectWords = [
+    "bible", "old testament", "new testament", "genesis", "exodus", "leviticus", "numbers", "deuteronomy",
+    "joshua", "judges", "samuel", "kings", "chronicles", "ezra", "nehemiah", "esther", "job", "psalms",
+    "proverbs", "ecclesiastes", "isaiah", "jeremiah", "ezekiel", "daniel", "matthew", "mark", "luke",
+    "john", "acts", "romans", "corinthians", "galatians", "ephesians", "philippians", "colossians",
+    "thessalonians", "timothy", "titus", "philemon", "hebrews", "james", "peter", "jude", "revelation",
+    "introduction", "commentary", "notes", "study", "survey"
+  ];
+  if (subjectWords.some((word) => lower.includes(word))) return "";
+  if (/\b(to|in|part|volume|vol|chapter|lesson|unit)\b/i.test(text)) return "";
+  if (!/[a-z]/i.test(text)) return "";
+  return text;
+}
+
 function inferAuthor(filename) {
   const base = path.basename(String(filename || ""), path.extname(String(filename || ""))).replace(/[_]+/g, " ").trim();
   const match = base.match(/^(.{2,80}?)\s+-\s+(.{2,160})$/);
-  return match ? match[1].trim() : "";
+  return match ? cleanAuthorName(match[1]) : "";
 }
 
 function inferTitle(filename) {
@@ -788,9 +830,34 @@ function classifyResource({ title, originalFilename, category }) {
 
 function buildBibliography({ title, author, format, originalFilename, category, classification }) {
   const cleanTitle = title || path.basename(originalFilename || "Untitled", path.extname(originalFilename || ""));
-  const authorPart = author ? `${author}. ` : "";
-  const categoryPart = category?.name ? ` ${category.name}.` : "";
-  return `${authorPart}${cleanTitle}. E-book, ${String(format || "").toUpperCase()}.${categoryPart} Dewey ${classification?.number || "200"} ${classification?.label || "Religion"}.`;
+  const cleanAuthor = cleanAuthorName(author);
+  const authorPart = cleanAuthor ? `${cleanAuthor}. ` : "";
+  const categoryPart = category?.name ? ` Department: ${category.name}.` : "";
+  const filePart = originalFilename ? ` Source file: ${path.basename(originalFilename)}.` : "";
+  return `${authorPart}${cleanTitle}. E-book, ${String(format || "").toUpperCase()}.${categoryPart} Classification: Dewey ${classification?.number || "200"} ${classification?.label || "Religion"}.${filePart}`;
+}
+
+function callNumberFor({ title, author, classification }) {
+  const base = cleanAuthorName(author) || title || "";
+  const code = String(base)
+    .replace(/[^a-z0-9]/gi, "")
+    .toUpperCase()
+    .slice(0, 4);
+  return `${classification?.number || "200"}${code ? ` ${code}` : ""}`;
+}
+
+function classificationDetailsFor({ title, author, format, originalFilename, categoryName, classification }) {
+  const cleanAuthor = cleanAuthorName(author) || "Unknown";
+  return [
+    `Call number: ${callNumberFor({ title, author, classification })}`,
+    `Dewey: ${classification?.number || "200"} ${classification?.label || "Religion"}`,
+    `Title: ${title || "Untitled"}`,
+    `Author: ${cleanAuthor}`,
+    `Department: ${categoryName || "Uncategorized"}`,
+    `Format: ${String(format || "").toUpperCase() || "E-book"}`,
+    `File: ${path.basename(originalFilename || "") || "Not recorded"}`,
+    `Confidence: ${classification?.confidence || "low"}`
+  ].join("; ");
 }
 
 function exportRows(resources, categories) {
@@ -808,7 +875,16 @@ function exportRows(resources, categories) {
         category: item.categoryName,
         deweyNumber: item.classification?.number || "",
         deweyClass: item.classification?.label || "",
+        callNumber: callNumberFor({ title: item.title, author: item.author, classification: item.classification }),
         confidence: item.classification?.confidence || "",
+        classificationDetails: classificationDetailsFor({
+          title: item.title,
+          author: item.author,
+          format: item.format,
+          originalFilename: item.originalFilename,
+          categoryName: item.categoryName,
+          classification: item.classification
+        }),
         bibliography: item.bibliography || "",
         filename: item.originalFilename || ""
       };
@@ -821,8 +897,8 @@ function escapeCsv(value) {
 }
 
 function exportCsv(rows) {
-  const headers = ["No", "Title", "Author", "Type", "Format", "Category", "Dewey Number", "Dewey Class", "Confidence", "Bibliography", "Filename"];
-  const keys = ["no", "title", "author", "type", "format", "category", "deweyNumber", "deweyClass", "confidence", "bibliography", "filename"];
+  const headers = ["No", "Title", "Author", "Type", "Format", "Category", "Dewey Number", "Dewey Class", "Call Number", "Confidence", "Classification Details", "Bibliography", "Filename"];
+  const keys = ["no", "title", "author", "type", "format", "category", "deweyNumber", "deweyClass", "callNumber", "confidence", "classificationDetails", "bibliography", "filename"];
   return [headers.map(escapeCsv).join(","), ...rows.map((row) => keys.map((key) => escapeCsv(row[key])).join(","))].join("\r\n");
 }
 
@@ -833,10 +909,12 @@ function exportHtml(rows) {
       <td>${escapeHtml(row.title)}</td>
       <td>${escapeHtml(row.author)}</td>
       <td>${escapeHtml(row.type)}</td>
+      <td>${escapeHtml(row.format)}</td>
       <td>${escapeHtml(row.category)}</td>
-      <td>${escapeHtml(row.deweyNumber)}</td>
-      <td>${escapeHtml(row.deweyClass)}</td>
+      <td><strong>${escapeHtml(row.callNumber)}</strong><br>${escapeHtml(row.deweyNumber)} ${escapeHtml(row.deweyClass)}<br><span>${escapeHtml(row.confidence)}</span></td>
+      <td>${escapeHtml(row.classificationDetails)}</td>
       <td>${escapeHtml(row.bibliography)}</td>
+      <td>${escapeHtml(row.filename)}</td>
     </tr>
   `).join("");
   return `<!doctype html>
@@ -845,18 +923,24 @@ function exportHtml(rows) {
   <meta charset="utf-8">
   <title>AGBS Library Classification and Bibliography</title>
   <style>
-    body { font-family: Arial, sans-serif; color: #17202a; }
-    h1 { color: #084d47; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { border: 1px solid #d9e0e6; padding: 6px; vertical-align: top; text-align: left; }
+    body { font-family: Arial, sans-serif; color: #17202a; margin: 24px; }
+    h1 { color: #084d47; margin-bottom: 4px; }
+    .summary { color: #53616f; margin-top: 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+    th, td { border: 1px solid #d9e0e6; padding: 7px; vertical-align: top; text-align: left; overflow-wrap: anywhere; }
     th { background: #eef8f6; }
+    th:nth-child(1), td:nth-child(1) { width: 34px; }
+    th:nth-child(2), td:nth-child(2) { width: 14%; }
+    th:nth-child(7), td:nth-child(7) { width: 13%; }
+    th:nth-child(8), td:nth-child(8) { width: 22%; }
+    th:nth-child(9), td:nth-child(9) { width: 22%; }
   </style>
 </head>
 <body>
   <h1>AGBS Library Classification and Bibliography</h1>
-  <p>Generated ${new Date().toLocaleString("en-IN")}.</p>
+  <p class="summary">Generated ${new Date().toLocaleString("en-IN")}. Total books: ${rows.length}.</p>
   <table>
-    <thead><tr><th>No</th><th>Title</th><th>Author</th><th>Type</th><th>Category</th><th>Dewey No.</th><th>Dewey Class</th><th>Bibliography</th></tr></thead>
+    <thead><tr><th>No</th><th>Title</th><th>Author</th><th>Type</th><th>Format</th><th>Category</th><th>Dewey / Call No.</th><th>Book Classification Details</th><th>Bibliography</th><th>File</th></tr></thead>
     <tbody>${bodyRows}</tbody>
   </table>
 </body>
@@ -868,7 +952,9 @@ function exportPdf(rows) {
   for (const row of rows) {
     lines.push(`${row.no}. ${row.title}`);
     if (row.author) lines.push(`   Author: ${row.author}`);
-    lines.push(`   ${row.type} | ${row.category} | Dewey ${row.deweyNumber} ${row.deweyClass}`);
+    lines.push(`   ${row.type} | ${row.format} | ${row.category}`);
+    lines.push(`   Call no.: ${row.callNumber} | Dewey ${row.deweyNumber} ${row.deweyClass}`);
+    lines.push(`   ${row.classificationDetails}`);
     lines.push(`   ${row.bibliography}`);
     lines.push("");
   }
@@ -914,9 +1000,9 @@ function simplePdf(lines) {
 function classifiedResource(resource, categories) {
   const category = categories.find((item) => item.id === resource.categoryId) || null;
   const title = resource.title || path.basename(resource.originalFilename || "Untitled", path.extname(resource.originalFilename || ""));
-  const author = resource.author || inferAuthor(resource.originalFilename || title);
+  const author = cleanAuthorName(resource.author) || inferAuthor(resource.originalFilename || title);
   const classification = resource.classification || classifyResource({ title, originalFilename: resource.originalFilename, category });
-  const bibliography = resource.bibliography || buildBibliography({ title, author, format: resource.format, originalFilename: resource.originalFilename, category, classification });
+  const bibliography = buildBibliography({ title, author, format: resource.format, originalFilename: resource.originalFilename, category, classification });
   return {
     ...resource,
     title,
@@ -928,8 +1014,8 @@ function classifiedResource(resource, categories) {
   };
 }
 
-async function recordSkippedUpload({ file, reason, user, batch, hash }) {
-  return await db.insert("skippedUploads", {
+function buildSkippedUpload({ file, reason, user, batch, hash }) {
+  return {
     filename: file.filename,
     normalizedFilename: normalizeFilename(file.filename),
     reason,
@@ -939,7 +1025,11 @@ async function recordSkippedUpload({ file, reason, user, batch, hash }) {
     contentType: file.contentType,
     hash,
     checked: false
-  });
+  };
+}
+
+async function recordSkippedUpload({ file, reason, user, batch, hash }) {
+  return await db.insert("skippedUploads", buildSkippedUpload({ file, reason, user, batch, hash }));
 }
 
 async function replaceResourceFile(resource, file, user) {

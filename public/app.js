@@ -620,6 +620,7 @@ async function adminPage() {
             </label>
             <div class="button-row">
               <button type="submit" id="uploadSubmit">Upload to library</button>
+              <button type="button" class="secondary" id="clearUploadSelection" disabled>Clear selected files</button>
               <button type="button" class="danger" id="stopUpload" disabled>Stop upload</button>
             </div>
             <p class="subtle" id="uploadSelection">No files selected.</p>
@@ -813,6 +814,7 @@ function wireAdmin() {
   const uploadStatus = document.querySelector("#uploadStatus");
   const uploadLog = document.querySelector("#uploadLog");
   const uploadButton = document.querySelector("#uploadSubmit");
+  const clearUploadButton = document.querySelector("#clearUploadSelection");
   const stopUploadButton = document.querySelector("#stopUpload");
   let uploadController = null;
   const addUploadLog = (message) => {
@@ -827,9 +829,19 @@ function wireAdmin() {
     uploadSelection.textContent = files.length ? `${files.length} file(s) selected, ${mb} MB total.` : "No files selected.";
     const message = totalSize > 4 * 1024 * 1024 || hasZip ? "Safe upload mode will send each PDF/file or ZIP entry carefully, then place the finished files into folders." : "";
     uploadStatus.textContent = message;
+    clearUploadButton.disabled = !files.length || Boolean(uploadController);
   };
   resourceInput.addEventListener("change", updateUploadSelection);
   folderInput.addEventListener("change", updateUploadSelection);
+  clearUploadButton.addEventListener("click", () => {
+    if (uploadController) return;
+    resourceInput.value = "";
+    folderInput.value = "";
+    uploadLog.innerHTML = "";
+    setUploadActivityStatus("");
+    updateUploadSelection();
+    addUploadLog("Selection cleared.");
+  });
   stopUploadButton.addEventListener("click", async () => {
     if (!uploadController) return;
     stopUploadButton.disabled = true;
@@ -861,11 +873,13 @@ function wireAdmin() {
       state.activeUpload = { controller: uploadController };
       state.uploadActivity = { running: true, status: "Uploading...", logs: [], added: 0, skipped: 0, failed: 0 };
       uploadButton.disabled = true;
+      clearUploadButton.disabled = true;
       stopUploadButton.disabled = false;
       uploadLog.innerHTML = "";
       setUploadActivityStatus("Uploading...");
       let data;
-      if (totalSize > 4 * 1024 * 1024 || files.some(isZipFile)) {
+      const streamingUpload = totalSize > 4 * 1024 * 1024 || files.some(isZipFile);
+      if (streamingUpload) {
         data = await uploadChunked(files, options, (message) => {
           setUploadActivityStatus(message);
           addUploadLog(message);
@@ -908,21 +922,28 @@ function wireAdmin() {
       const skippedCount = data.skipped?.length || 0;
       const failedCount = data.failed?.length || 0;
       const addedResources = Array.isArray(data.resources) ? data.resources : [];
-      state.uploadActivity.added += addedResources.length;
-      state.uploadActivity.skipped += skippedCount;
-      state.uploadActivity.failed += failedCount;
+      if (!streamingUpload) {
+        state.uploadActivity.added += addedResources.length;
+        state.uploadActivity.skipped += skippedCount;
+        state.uploadActivity.failed += failedCount;
+      }
       setUploadActivityStatus(`${addedResources.length} file(s) added to the library. ${skippedCount} skipped. ${failedCount} failed.`);
-      addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
-      (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
-      (data.failed || []).forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
-      await loadAdminSummary();
-      state.reports = await api("/api/reports");
-      state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
-      refreshResourceReviewTable();
-      await refreshStorageUsage();
-      refreshSkippedUploadsTable();
-      wireResourceActions();
-      wireSkippedUploadActions();
+      if (!streamingUpload) {
+        addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
+        (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
+        (data.failed || []).forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
+      }
+      try {
+        await loadAdminSummary();
+        state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
+        refreshResourceReviewTable();
+        await refreshStorageUsage();
+        refreshSkippedUploadsTable();
+        wireResourceActions();
+        wireSkippedUploadActions();
+      } catch {
+        addUploadLog("Upload finished. Refresh the admin page if the newest list is not visible yet.");
+      }
     } catch (error) {
       const stopped = error.name === "AbortError";
       setUploadActivityStatus(stopped ? "Upload stopped." : error.message);
@@ -933,6 +954,7 @@ function wireAdmin() {
       uploadController = null;
       state.activeUpload = null;
       state.uploadActivity.running = false;
+      updateUploadSelection();
       refreshUploadDock();
     }
   });
