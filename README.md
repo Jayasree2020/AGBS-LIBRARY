@@ -57,7 +57,7 @@ The app is deployed on Vercel under the `agbs-library` project and is connected 
 
 [https://www.agbslibrary.com](https://www.agbslibrary.com)
 
-Vercel is suitable for the live app interface. For long-term production use with many large PDF/EPUB files, durable file storage is required. The current production setup uses AWS S3 through the `AWS_*` environment variables below. With AWS S3 enabled, every PDF/EPUB/image is stored as one object under `books/`, and small app records are stored as JSON under `data/`. Vercel serverless temporary storage can reset and should not be treated as permanent book storage by itself.
+Vercel is suitable for the live app interface. AWS S3 is the production storage system for both uploaded books and the app's small JSON records. Every PDF/EPUB/image is stored as one object under `books/`, and records are stored under `data/`.
 
 ## Environment Variables
 
@@ -68,24 +68,17 @@ ADMIN_EMAIL
 ADMIN_BOOTSTRAP_PASSWORD
 SESSION_SECRET
 BASE_URL
-MONGODB_URI
-MONGODB_DB
 AWS_REGION
 AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY
 AWS_S3_BUCKET
 AWS_S3_PREFIX
-R2_ACCOUNT_ID
-R2_ACCESS_KEY_ID
-R2_SECRET_ACCESS_KEY
-R2_BUCKET
-R2_PREFIX
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 GOOGLE_REDIRECT_URI
 ```
 
-`ADMIN_BOOTSTRAP_PASSWORD`, OAuth secrets, database URLs, AWS/R2 keys, and API keys must stay in Vercel environment variables. Do not commit them to GitHub.
+`ADMIN_BOOTSTRAP_PASSWORD`, OAuth secrets, AWS keys, and API keys must stay in Vercel environment variables. Do not commit them to GitHub.
 
 ## Local Development
 

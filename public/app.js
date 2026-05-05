@@ -490,8 +490,8 @@ async function setupPdfViewer(resourceId) {
   const status = document.querySelector("#pdfPageStatus");
   const canvas = document.querySelector("#pdfCanvas");
   const context = canvas.getContext("2d");
-  const pdfjs = await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+    const pdfjs = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs");
+    pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
   const response = await fetch(`/protected-file/${resourceId}`, { cache: "no-store" });
   if (!response.ok) throw new Error("Unable to open this PDF.");
   const pdf = await pdfjs.getDocument({ data: await response.arrayBuffer() }).promise;

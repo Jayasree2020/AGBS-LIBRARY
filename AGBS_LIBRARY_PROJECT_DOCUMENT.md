@@ -36,7 +36,7 @@ The app supports:
 - Admin bootstrap login from environment variables.
 - Google sign-in when Google OAuth environment variables are configured.
 
-Sensitive values such as admin password, GitHub tokens, Vercel tokens, Google OAuth secrets, MongoDB connection strings, and session secrets must never be committed into GitHub.
+Sensitive values such as admin password, GitHub tokens, Vercel tokens, Google OAuth secrets, AWS access keys, and session secrets must never be committed into GitHub.
 
 ## Library Departments
 
@@ -151,25 +151,25 @@ Students do not see other students' records.
 
 ## Storage And Database
 
-The app can run with local JSON files for development, but production should use durable storage.
+The app can run with local JSON files for development, but production uses AWS S3.
 
-The preferred no-Mongo setup is Cloudflare R2:
+AWS S3 production storage:
 
 - Book files are stored as one object per PDF/EPUB/image under `books/`.
 - Small app records are stored as JSON objects under `data/`.
 - Large uploads may travel in temporary upload steps, but the final stored object is still one complete file.
 
-Required R2 environment variables:
+Required AWS environment variables:
 
 ```text
-R2_ACCOUNT_ID
-R2_ACCESS_KEY_ID
-R2_SECRET_ACCESS_KEY
-R2_BUCKET
-R2_PREFIX
+AWS_REGION
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_S3_BUCKET
+AWS_S3_PREFIX
 ```
 
-MongoDB collections used by the app:
+JSON record files stored in AWS S3:
 
 - `users`
 - `categories`
@@ -179,11 +179,10 @@ MongoDB collections used by the app:
 - `readingSessions`
 - `accessEvents`
 - `skippedUploads`
-- MongoDB GridFS collections for stored resource files only if MongoDB is configured instead of R2.
 
 Important production note:
 
-Vercel serverless file storage is temporary. For permanent uploaded books, configure durable storage. The current app supports Cloudflare R2 as the recommended no-Mongo storage option. Without R2 or another durable store, old uploaded files may disappear after Vercel resets the server runtime.
+Vercel serverless file storage is temporary. Permanent uploaded books and app records now go to AWS S3.
 
 ## Environment Variables
 
@@ -194,13 +193,11 @@ ADMIN_EMAIL
 ADMIN_BOOTSTRAP_PASSWORD
 SESSION_SECRET
 BASE_URL
-MONGODB_URI
-MONGODB_DB
-R2_ACCOUNT_ID
-R2_ACCESS_KEY_ID
-R2_SECRET_ACCESS_KEY
-R2_BUCKET
-R2_PREFIX
+AWS_REGION
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_S3_BUCKET
+AWS_S3_PREFIX
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 GOOGLE_REDIRECT_URI
@@ -224,13 +221,13 @@ Never place real values for these in GitHub or frontend files.
 
 - Browser-level screenshots and copying cannot be fully prevented.
 - EPUB reading is served through the protected route; deeper EPUB-specific page/location tracking may need a dedicated EPUB reader library later.
-- Permanent file reliability depends on Cloudflare R2 or another durable storage service being configured.
+- Permanent file reliability depends on AWS S3 staying configured in Vercel.
 - Google sign-in works only after Google OAuth credentials are set correctly in Vercel.
 
 ## Suggested Next Work
 
-1. Configure Cloudflare R2 in Vercel using the `R2_*` environment variables.
-2. Confirm uploaded files remain available after Vercel redeploys.
+1. Upload books directly through the admin dashboard.
+2. Confirm large batch upload speed with real seminary folders.
 3. Configure Google OAuth credentials for Gmail sign-in.
 4. Add better PDF/EPUB page-location tracking if required.
 5. Add export buttons for admin reports if the director needs Excel/PDF reporting.

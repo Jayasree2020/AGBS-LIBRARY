@@ -5,7 +5,6 @@ import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import os from "node:os";
-import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,11 +31,6 @@ const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID || "";
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY || "";
 const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET || "";
 const AWS_S3_PREFIX = (process.env.AWS_S3_PREFIX || "agbs-library").replace(/^\/+|\/+$/g, "");
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
-const R2_BUCKET = process.env.R2_BUCKET || "";
-const R2_PREFIX = (process.env.R2_PREFIX || "agbs-library").replace(/^\/+|\/+$/g, "");
 const RUNTIME_DIR = process.env.VERCEL ? path.join(os.tmpdir(), "agbs-library") : __dirname;
 const DATA_DIR = path.join(RUNTIME_DIR, "data");
 const STORAGE_DIR = path.join(RUNTIME_DIR, "storage");
@@ -133,83 +127,6 @@ class JsonStore {
 
   async filter(collection, predicate) {
     return (await this.all(collection)).filter(predicate);
-  }
-}
-
-class MongoStore {
-  constructor(uri, databaseName) {
-    this.uri = uri;
-    this.databaseName = databaseName;
-  }
-
-  async init() {
-    const { MongoClient, GridFSBucket } = await import("mongodb");
-    this.client = new MongoClient(this.uri);
-    await this.client.connect();
-    this.db = this.client.db(this.databaseName || "seminary_library");
-    this.bucket = new GridFSBucket(this.db, { bucketName: "resourceFiles" });
-    await fs.mkdir(STORAGE_DIR, { recursive: true });
-  }
-
-  collection(name) {
-    return this.db.collection(name);
-  }
-
-  async all(collection) {
-    return await this.collection(collection).find({}).toArray();
-  }
-
-  async insert(collection, record) {
-    const now = new Date().toISOString();
-    const full = { id: crypto.randomUUID(), createdAt: now, updatedAt: now, ...record };
-    await this.collection(collection).insertOne(full);
-    return full;
-  }
-
-  async update(collection, id, patch) {
-    await this.collection(collection).updateOne({ id }, { $set: { ...patch, updatedAt: new Date().toISOString() } });
-    return await this.findOne(collection, (item) => item.id === id);
-  }
-
-  async delete(collection, id) {
-    const result = await this.collection(collection).deleteOne({ id });
-    return result.deletedCount > 0;
-  }
-
-  async findOne(collection, predicate) {
-    return (await this.all(collection)).find(predicate) || null;
-  }
-
-  async filter(collection, predicate) {
-    return (await this.all(collection)).filter(predicate);
-  }
-
-  async saveFile(name, buffer, metadata = {}) {
-    await this.deleteFile(name);
-    await new Promise((resolve, reject) => {
-      Readable.from([buffer])
-        .pipe(this.bucket.openUploadStream(name, { metadata }))
-        .on("error", reject)
-        .on("finish", resolve);
-    });
-  }
-
-  async deleteFile(name) {
-    const files = await this.collection("resourceFiles.files").find({ filename: name }).toArray();
-    await Promise.all(files.map((file) => this.bucket.delete(file._id).catch(() => {})));
-  }
-
-  async readFile(name) {
-    const file = await this.collection("resourceFiles.files").findOne({ filename: name });
-    if (!file) return null;
-    const chunks = [];
-    await new Promise((resolve, reject) => {
-      this.bucket.openDownloadStreamByName(name)
-        .on("data", (chunk) => chunks.push(chunk))
-        .on("error", reject)
-        .on("end", resolve);
-    });
-    return Buffer.concat(chunks);
   }
 }
 
@@ -433,17 +350,6 @@ async function createStore() {
       prefix: AWS_S3_PREFIX
     });
   }
-  if (R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET) {
-    return new ObjectStore({
-      region: "auto",
-      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      accessKeyId: R2_ACCESS_KEY_ID,
-      secretAccessKey: R2_SECRET_ACCESS_KEY,
-      bucket: R2_BUCKET,
-      prefix: R2_PREFIX
-    });
-  }
-  if (process.env.MONGODB_URI) return new MongoStore(process.env.MONGODB_URI, process.env.MONGODB_DB);
   return new JsonStore(DATA_DIR);
 }
 
@@ -897,9 +803,8 @@ async function routeApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/config") {
     return json(res, 200, {
       googleConfigured: Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
-      mongoConfigured: Boolean(process.env.MONGODB_URI),
       awsConfigured: Boolean(AWS_REGION && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY && AWS_S3_BUCKET),
-      r2Configured: Boolean(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET),
+      storageProvider: AWS_REGION && AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY && AWS_S3_BUCKET ? "aws-s3" : "local-json",
       adminEmail: ADMIN_EMAIL
     });
   }
