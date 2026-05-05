@@ -59,7 +59,7 @@ The app is deployed on Vercel under the `agbs-library` project and is connected 
 
 Vercel is suitable for the live app interface. AWS S3 is the production storage system for both uploaded books and the app's small JSON records. Every PDF/EPUB/image is stored as one object under `books/`, and records are stored under `data/`.
 
-The admin dashboard shows only total storage left and estimated month runway. The default planning budget is `1800` GB for `20` months, so the portal gives more upload room while still planning the AWS credits across a long operating period.
+The admin dashboard shows only total storage left and estimated month runway. The default planning budget is `3000` GB for `12` months, so the portal tracks storage against a one-year AWS-credit plan.
 
 ## Environment Variables
 
