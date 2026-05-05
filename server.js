@@ -664,9 +664,10 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
     const category = autoCategorize ? (categoryForFile(file.filename, categories) || selectedCategory) : selectedCategory;
     const suggested = category?.name || selectedCategory?.name || "";
     const storageName = `${crypto.randomUUID()}${extension}`;
-    await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
     if (typeof db.saveFile === "function") {
       await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
+    } else {
+      await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
     }
     const title = inferTitle(file.filename);
     const author = inferAuthor(file.filename);
@@ -902,6 +903,10 @@ function exportCsv(rows) {
   return [headers.map(escapeCsv).join(","), ...rows.map((row) => keys.map((key) => escapeCsv(row[key])).join(","))].join("\r\n");
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+}
+
 function exportHtml(rows) {
   const bodyRows = rows.map((row) => `
     <tr>
@@ -1041,8 +1046,11 @@ async function replaceResourceFile(resource, file, user) {
   const duplicate = existingResources.find((item) => item.id !== resource.id && (item.metadata?.hash === hash || resourceDuplicateKey(item) === duplicateKey));
   if (duplicate) throw new Error("This file already exists in the library, so it was not added again.");
   const storageName = `${crypto.randomUUID()}${extension}`;
-  await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
-  if (typeof db.saveFile === "function") await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
+  if (typeof db.saveFile === "function") {
+    await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
+  } else {
+    await fs.writeFile(path.join(STORAGE_DIR, storageName), file.content);
+  }
   await removeStoredFile(resource.storageName);
   const title = inferTitle(file.filename);
   const author = inferAuthor(file.filename);
