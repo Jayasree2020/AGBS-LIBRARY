@@ -171,7 +171,7 @@ AWS_STORAGE_BUDGET_GB
 AWS_STORAGE_PLAN_MONTHS
 ```
 
-`AWS_STORAGE_BUDGET_GB` is set to `1500` and `AWS_STORAGE_PLAN_MONTHS` is set to `24` by default so the dashboard tracks storage against a two-year credit plan instead of spending the full AWS credit balance in one month.
+`AWS_STORAGE_BUDGET_GB` is set to `1800` and `AWS_STORAGE_PLAN_MONTHS` is set to `20` by default so the dashboard gives more upload room while still tracking storage against a long AWS-credit plan.
 
 JSON record files stored in AWS S3:
 

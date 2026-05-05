@@ -647,7 +647,7 @@ function storageUsageSummary() {
   const usage = state.storageUsage || {};
   const remaining = usage.remainingGb === null || usage.remainingGb === undefined ? "Set budget" : formatGb(usage.remainingGb);
   const runway = usage.runwayMonths === null || usage.runwayMonths === undefined
-    ? `${Number(usage.planMonths || 24)}+ months`
+    ? `${Number(usage.planMonths || 20)}+ months`
     : `${Math.max(1, Math.floor(Number(usage.runwayMonths || 0))).toLocaleString()} months`;
   return `
     <section class="stats-grid storage-grid storage-simple">
@@ -660,7 +660,7 @@ function storageUsageSummary() {
         <strong>${runway}</strong>
       </article>
     </section>
-    <p class="subtle">Plan: ${formatGb(usage.budgetGb)} for ${Number(usage.planMonths || 24)} months. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
+    <p class="subtle">Plan: ${formatGb(usage.budgetGb)} for ${Number(usage.planMonths || 20)} months. This reduces automatically as files are uploaded. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
   `;
 }
 

@@ -31,8 +31,8 @@ const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID || "";
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY || "";
 const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET || "";
 const AWS_S3_PREFIX = (process.env.AWS_S3_PREFIX || "agbs-library").replace(/^\/+|\/+$/g, "");
-const AWS_STORAGE_BUDGET_GB = Number(process.env.AWS_STORAGE_BUDGET_GB || 1500);
-const AWS_STORAGE_PLAN_MONTHS = Number(process.env.AWS_STORAGE_PLAN_MONTHS || 24);
+const AWS_STORAGE_BUDGET_GB = Number(process.env.AWS_STORAGE_BUDGET_GB || 1800);
+const AWS_STORAGE_PLAN_MONTHS = Number(process.env.AWS_STORAGE_PLAN_MONTHS || 20);
 const RUNTIME_DIR = process.env.VERCEL ? path.join(os.tmpdir(), "agbs-library") : __dirname;
 const DATA_DIR = path.join(RUNTIME_DIR, "data");
 const STORAGE_DIR = path.join(RUNTIME_DIR, "storage");
@@ -1005,7 +1005,7 @@ async function routeApi(req, res, url) {
     const usedGb = Number(usage.totalBytes || 0) / 1_000_000_000;
     const bookGb = Number(usage.bookBytes || 0) / 1_000_000_000;
     const budgetGb = Number.isFinite(AWS_STORAGE_BUDGET_GB) && AWS_STORAGE_BUDGET_GB > 0 ? AWS_STORAGE_BUDGET_GB : 0;
-    const planMonths = Number.isFinite(AWS_STORAGE_PLAN_MONTHS) && AWS_STORAGE_PLAN_MONTHS > 0 ? AWS_STORAGE_PLAN_MONTHS : 24;
+    const planMonths = Number.isFinite(AWS_STORAGE_PLAN_MONTHS) && AWS_STORAGE_PLAN_MONTHS > 0 ? AWS_STORAGE_PLAN_MONTHS : 20;
     const runwayBaseGb = usedGb >= 0.01 ? usedGb : 0;
     const runwayMonths = budgetGb && runwayBaseGb ? (budgetGb * planMonths) / runwayBaseGb : null;
     return json(res, 200, {
