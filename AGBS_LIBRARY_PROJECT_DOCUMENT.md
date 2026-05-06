@@ -148,6 +148,14 @@ Default departments:
 - Religions
 - Social Analysis
 - Women Studies
+- Languages
+- English
+- Greek
+- Hebrew
+- Research Methodology
+- Music
+- Homiletics
+- Pastoral Care and Counselling
 
 Admins can add more categories from the admin dashboard.
 

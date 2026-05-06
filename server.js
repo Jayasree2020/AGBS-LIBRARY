@@ -49,7 +49,15 @@ const defaultCategories = [
   "Christian Ethics",
   "Religions",
   "Social Analysis",
-  "Women Studies"
+  "Women Studies",
+  "Languages",
+  "English",
+  "Greek",
+  "Hebrew",
+  "Research Methodology",
+  "Music",
+  "Homiletics",
+  "Pastoral Care and Counselling"
 ];
 
 const mimeTypes = {
@@ -837,12 +845,20 @@ const deweyRules = [
   { number: "230", label: "Christian Theology", keywords: ["christian theology", "theology", "doctrine", "systematic", "christology", "trinity", "atonement", "soteriology", "pneumatology", "ecclesiology", "eschatology"] },
   { number: "241", label: "Christian Ethics", keywords: ["christian ethics", "ethics", "moral", "morality", "justice", "virtue"] },
   { number: "253", label: "Christian Ministry", keywords: ["christian ministry", "ministry", "pastoral", "preaching", "homiletics", "worship", "discipleship", "leadership", "counseling", "counselling"] },
+  { number: "253.5", label: "Homiletics", keywords: ["homiletics", "homiletic", "preaching", "sermon", "sermons", "expository preaching", "pulpit"] },
+  { number: "253.5", label: "Pastoral Care and Counselling", keywords: ["pastoral care", "pastoral counselling", "pastoral counseling", "counselling", "counseling", "chaplain", "grief", "care ministry"] },
+  { number: "264.2", label: "Music", keywords: ["music", "hymn", "hymns", "hymnology", "worship music", "choir", "song", "songs", "liturgy"] },
   { number: "266", label: "Missiology", keywords: ["missiology", "mission", "missions", "evangelism", "church planting", "cross cultural"] },
   { number: "270", label: "History of Christianity", keywords: ["history of christianity", "church history", "christian history", "reformation", "patristic", "medieval church", "early church"] },
   { number: "200", label: "Religions", keywords: ["religions", "religion", "hinduism", "islam", "buddhism", "sikhism", "tribal religion", "comparative religion"] },
   { number: "261.8", label: "Social Analysis", keywords: ["social analysis", "society", "social", "dalit", "tribal", "poverty", "politics", "economics", "liberation", "human rights"] },
+  { number: "001.4", label: "Research Methodology", keywords: ["research methodology", "research method", "research methods", "methodology", "thesis", "dissertation", "academic writing", "citation", "bibliography"] },
   { number: "302.2", label: "Communication", keywords: ["communication", "media", "journalism", "public speaking", "language", "rhetoric"] },
-  { number: "305.42", label: "Women Studies", keywords: ["women studies", "women", "woman", "gender", "feminist", "feminism"] }
+  { number: "305.42", label: "Women Studies", keywords: ["women studies", "women", "woman", "gender", "feminist", "feminism"] },
+  { number: "420", label: "English", keywords: ["english", "english language", "grammar", "composition", "reading english", "writing english"] },
+  { number: "480", label: "Greek", keywords: ["greek", "biblical greek", "koine", "koine greek", "new testament greek"] },
+  { number: "492.4", label: "Hebrew", keywords: ["hebrew", "biblical hebrew", "hebrew bible", "old testament hebrew"] },
+  { number: "400", label: "Languages", keywords: ["languages", "language studies", "language", "linguistics", "translation", "lexicon", "dictionary"] }
 ];
 
 function classifyResource({ title, originalFilename, category }) {
@@ -1174,7 +1190,15 @@ function categorySuggestion(name) {
     ["Christian Ethics", ["christian ethics", "ethics", "moral", "bioethics", "justice", "virtue", "rights"]],
     ["Religions", ["religion", "religions", "hindu", "hinduism", "islam", "muslim", "buddhist", "buddhism", "interfaith", "comparative religion"]],
     ["Social Analysis", ["social", "society", "analysis", "politic", "politics", "econom", "caste", "culture", "development", "sociology"]],
-    ["Women Studies", ["women", "woman", "gender", "feminist", "feminism", "womanist"]]
+    ["Women Studies", ["women", "woman", "gender", "feminist", "feminism", "womanist"]],
+    ["Research Methodology", ["research methodology", "research method", "research methods", "methodology", "thesis", "dissertation", "academic writing", "citation", "bibliography"]],
+    ["Music", ["music", "hymn", "hymns", "hymnology", "choir", "song", "songs", "worship music"]],
+    ["Homiletics", ["homiletic", "homiletics", "preaching", "sermon", "sermons", "expository preaching"]],
+    ["Pastoral Care and Counselling", ["pastoral care", "pastoral counselling", "pastoral counseling", "counselling", "counseling", "chaplain", "grief"]],
+    ["Greek", ["greek", "biblical greek", "koine", "koine greek"]],
+    ["Hebrew", ["hebrew", "biblical hebrew", "old testament hebrew"]],
+    ["English", ["english", "english language", "grammar", "composition"]],
+    ["Languages", ["language", "languages", "language studies", "linguistics", "translation", "lexicon", "dictionary"]]
   ];
   return rules.find(([, words]) => words.some(includes))?.[0] || "";
 }
