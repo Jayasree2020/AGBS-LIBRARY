@@ -24,6 +24,7 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 - Library browsing by department.
 - Search by title, author, filename, department, format, Dewey number, Dewey class, or bibliography text.
 - Protected PDF/EPUB/image viewing inside the app.
+- Admin category correction directly from library search results.
 - Admin upload of files, folders, and ZIP archives.
 - Browser-side ZIP opening so each supported file inside the ZIP becomes its own library item.
 - Automatic category suggestion from file and folder names.
@@ -117,6 +118,7 @@ Export formats available in the admin dashboard:
 Admins can:
 
 - View protected files.
+- Change a book's category from the Library page while browsing/searching.
 - Update title and category.
 - Replace an existing file.
 - Remove a file from the library and storage.

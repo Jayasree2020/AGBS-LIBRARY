@@ -432,6 +432,7 @@ async function loadStorageUsage() {
 
 async function libraryPage() {
   await loadCategories();
+  const staff = ["admin", "director"].includes(state.user?.role);
   const params = new URLSearchParams(window.location.search);
   const categorySlug = params.get("category") || (route().startsWith("/library/") ? decodeURIComponent(route().split("/").pop()) : "");
   const searchText = params.get("q") || "";
@@ -465,8 +466,8 @@ async function libraryPage() {
         ${categories.map((category) => `<button class="secondary" data-link href="/library/${category.slug}">${category.name}</button>`).join("")}
       </div>
       <table class="table library-table">
-        <thead><tr><th>Title</th><th>Author</th><th>Category</th><th>Format</th><th>Action</th></tr></thead>
-        <tbody>${resources.length ? resources.map(libraryResourceRow).join("") : `<tr><td colspan="5">${emptyMessage}</td></tr>`}</tbody>
+        <thead><tr><th>Title</th><th>Author</th><th>Category</th><th>Format</th><th>Action</th>${staff ? "<th>Admin edit</th>" : ""}</tr></thead>
+        <tbody>${resources.length ? resources.map(libraryResourceRow).join("") : `<tr><td colspan="${staff ? 6 : 5}">${emptyMessage}</td></tr>`}</tbody>
       </table>
     </main>
   `);
@@ -489,6 +490,7 @@ function wireLibrarySearch() {
 
 function libraryResourceRow(resource) {
   const category = (Array.isArray(state.categories) ? state.categories : []).find((item) => item.id === resource.categoryId);
+  const staff = ["admin", "director"].includes(state.user?.role);
   return `
     <tr>
       <td>${escapeHtml(resource.title)}</td>
@@ -496,6 +498,14 @@ function libraryResourceRow(resource) {
       <td>${escapeHtml(category?.name || "Uncategorized")}</td>
       <td><span class="badge published">${escapeHtml(resource.format)}</span></td>
       <td><button data-read="${resource.id}">Read</button></td>
+      ${staff ? `
+        <td class="library-admin-edit">
+          <select data-library-category="${resource.id}" aria-label="Change category for ${escapeAttr(resource.title)}">
+            ${state.categories.map((item) => `<option value="${item.id}" ${item.id === resource.categoryId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+          </select>
+          <button class="secondary" data-library-save="${resource.id}">Save category</button>
+        </td>
+      ` : ""}
     </tr>
   `;
 }
@@ -503,6 +513,25 @@ function libraryResourceRow(resource) {
 function wireResourceButtons() {
   document.querySelectorAll("[data-read]").forEach((button) => {
     button.addEventListener("click", () => go(`/read/${button.dataset.read}`));
+  });
+  document.querySelectorAll("[data-library-save]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.dataset.librarySave;
+      const select = document.querySelector(`[data-library-category="${id}"]`);
+      if (!select) return;
+      const originalText = button.textContent;
+      button.disabled = true;
+      button.textContent = "Saving...";
+      try {
+        await api(`/api/resources/${id}`, { method: "PATCH", body: { categoryId: select.value } });
+        button.textContent = "Saved";
+        await libraryPage();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = originalText;
+        alert(error.message);
+      }
+    });
   });
 }
 

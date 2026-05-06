@@ -10,6 +10,7 @@ Admins manage:
 - Categories/departments.
 - Student accounts.
 - File updates/removal.
+- Category correction from the Library search view.
 - Duplicate skipping during upload.
 - Classification and bibliography exports.
 - Usage reports.
@@ -76,6 +77,7 @@ Admins can:
 - Stop an upload.
 - Clear selected files before upload.
 - Update title/category.
+- Change category directly from library search results when a book is found in the wrong department.
 - Replace files.
 - Remove files.
 - Add categories.
@@ -273,6 +275,7 @@ Student library behavior:
 - Category is optional.
 - Results appear in list/table form.
 - Student opens books through a protected reader route.
+- Admins/directors viewing the Library page can change a listed book's category directly from the search result row.
 
 Search should include:
 

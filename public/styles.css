@@ -465,6 +465,18 @@ label {
   min-width: 80px;
 }
 
+.library-admin-edit {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 320px;
+}
+
+.library-admin-edit select {
+  min-width: 0;
+}
+
 .hidden-file {
   display: none;
 }
@@ -594,5 +606,10 @@ label {
 
   .pdf-controls {
     justify-content: flex-start;
+  }
+
+  .library-admin-edit {
+    grid-template-columns: 1fr;
+    min-width: 220px;
   }
 }
