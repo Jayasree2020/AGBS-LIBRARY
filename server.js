@@ -493,6 +493,42 @@ function makeBootstrapCookie(email) {
   return `bootstrap_admin=${payload}.${sign(payload)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`;
 }
 
+function makeUploadToken(user) {
+  const payload = Buffer.from(JSON.stringify({
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+    exp: Date.now() + 12 * 60 * 60 * 1000
+  })).toString("base64url");
+  return `${payload}.${sign(`upload:${payload}`)}`;
+}
+
+async function userFromUploadToken(req) {
+  const raw = String(req.headers["x-upload-token"] || "");
+  if (!raw) return null;
+  const pathname = new URL(req.url, "http://localhost").pathname;
+  const allowedUploadPaths = new Set([
+    "/api/resources/upload",
+    "/api/resources/upload-chunk",
+    "/api/resources/upload-cancel",
+    "/api/resources/upload-complete"
+  ]);
+  if (!allowedUploadPaths.has(pathname)) return null;
+  const [payload, signature] = raw.split(".");
+  if (!payload || signature !== sign(`upload:${payload}`)) return null;
+  try {
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!data.userId || !data.exp || Date.now() > Number(data.exp)) return null;
+    if (data.userId === "bootstrap-admin" && data.email === ADMIN_EMAIL && data.role === "admin") {
+      return { id: "bootstrap-admin", email: ADMIN_EMAIL, name: "Library Administrator", role: "admin", provider: "env", active: true };
+    }
+    const user = await db.findOne("users", (item) => item.id === data.userId && item.active !== false);
+    return user && user.role === data.role ? user : null;
+  } catch {
+    return null;
+  }
+}
+
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || "").split(";").filter(Boolean).map((part) => {
     const [key, ...value] = part.trim().split("=");
@@ -512,13 +548,13 @@ async function currentUser(req) {
     }
   }
   const raw = parseCookies(req).library_session;
-  if (!raw) return null;
+  if (!raw) return await userFromUploadToken(req);
   const [sessionId, signature] = raw.split(".");
-  if (!sessionId || signature !== sign(sessionId)) return null;
+  if (!sessionId || signature !== sign(sessionId)) return await userFromUploadToken(req);
   const session = await db.findOne("loginSessions", (item) => item.id === sessionId && !item.endedAt);
-  if (!session) return null;
+  if (!session) return await userFromUploadToken(req);
   const user = await db.findOne("users", (item) => item.id === session.userId);
-  return user ? { ...user, sessionId } : null;
+  return user ? { ...user, sessionId } : await userFromUploadToken(req);
 }
 
 function send(res, status, body, headers = {}) {
@@ -1349,6 +1385,11 @@ async function routeApi(req, res, url) {
     if (!resource) return json(res, 404, { error: "Resource not found." });
     const categories = await db.all("categories");
     return json(res, 200, { resource: publicResource(classifiedResource(resource, categories)) });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/resources/upload-token") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    return json(res, 200, { uploadToken: makeUploadToken(user), expiresInHours: 12 });
   }
 
   if (req.method === "POST" && url.pathname === "/api/resources/upload") {

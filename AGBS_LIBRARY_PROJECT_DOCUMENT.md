@@ -10,7 +10,7 @@ Admins manage:
 - Categories/departments.
 - Student accounts.
 - File updates/removal.
-- Duplicate upload review.
+- Duplicate skipping during upload.
 - Classification and bibliography exports.
 - Usage reports.
 - AWS storage tracking.
@@ -178,8 +178,8 @@ Current upload behavior:
 - Uploads are automatically published.
 - No publish button is required.
 - Duplicate files are skipped.
-- Skipped duplicates are visible only to admins.
-- Admins can remove skipped duplicate records.
+- Skipped duplicates appear in the upload log during upload.
+- The admin dashboard does not keep showing a permanent skipped duplicate table.
 - Book count updates after upload.
 - Storage usage updates after upload.
 
@@ -192,6 +192,7 @@ Large uploads should work like this:
 3. The completed file is saved to AWS S3 as one complete object.
 4. The app creates one resource record for that file.
 5. The student sees one book, not upload parts.
+6. The active upload receives a temporary 12-hour upload token, so the batch does not collapse into repeated `Login required` failures if the normal browser cookie is not recognized during a later request.
 
 ZIP behavior:
 
@@ -210,7 +211,7 @@ Recommended admin practice:
 - Keep the browser tab open during upload.
 - Use the upload stop button if a wrong folder/file was selected.
 - Use the clear selected files button before upload if the wrong file was chosen.
-- Check skipped duplicate records after upload.
+- Check the upload log for skipped duplicate messages during upload.
 - Check storage left after each major batch.
 
 ## 8. Duplicate Handling
@@ -224,8 +225,8 @@ If a duplicate is found:
 
 - The file is not added again.
 - A skipped upload record is created.
-- Admins can review the skipped record.
-- Admins can remove skipped records from the dashboard.
+- The upload log tells the admin that the file was skipped.
+- The dashboard stays clean and does not show a separate skipped duplicate table.
 
 This keeps the student library clean and avoids repeated book entries.
 
@@ -451,7 +452,7 @@ Before saying a deployment is ready:
 - Test file can be removed.
 - Student search does not show all books until search/category is used.
 - Duplicate upload is skipped.
-- Skipped duplicate can be removed.
+- Duplicate upload is reported in the upload log.
 - HTML export downloads.
 - Word export downloads.
 - Storage panel loads.

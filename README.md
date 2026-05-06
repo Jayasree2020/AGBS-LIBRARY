@@ -14,7 +14,7 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 - R2 and MongoDB are not part of the current production setup.
 - Uploaded books are stored in AWS as complete files, not visible upload parts.
 - Admin uploads are automatically published into the library.
-- Duplicate files are skipped and shown only to admins.
+- Duplicate files are skipped automatically without keeping a permanent duplicate table on the admin dashboard.
 - The admin dashboard shows total storage left and estimated month runway for a 12-month AWS storage plan.
 
 ## What The App Does
@@ -72,7 +72,7 @@ Upload behavior:
 - Every supported file is saved as an e-book resource.
 - Uploads are automatically published.
 - Duplicates are skipped by file hash or normalized filename plus size.
-- Skipped duplicates appear in the admin-only skipped upload list.
+- Skipped duplicates are reported in the upload log, but the dashboard no longer keeps showing a separate duplicate upload table.
 - Admins can clear selected files before starting an upload.
 - Admins can stop an upload while it is running.
 - After upload, the admin can still use other dashboard actions.
@@ -83,6 +83,7 @@ Large upload behavior:
 - Large files are sent in smaller internal upload steps so Vercel can receive them.
 - ZIP files are opened in the browser, and each supported PDF/EPUB/image inside the ZIP is uploaded separately.
 - In AWS mode, the final file is written directly to AWS S3 instead of being kept on Vercel temporary disk.
+- Admin uploads receive a temporary upload token so long batches can continue even if the normal browser login cookie is not read during one of the later file requests.
 - This prevents the Vercel `ENOSPC: no space left on device` failure that happens when too many large files are copied into `/tmp`.
 - The final library record always points to one complete file, not a chunk.
 
@@ -119,7 +120,7 @@ Admins can:
 - Update title and category.
 - Replace an existing file.
 - Remove a file from the library and storage.
-- Remove skipped duplicate records.
+- Continue uploading without a permanent skipped-duplicates section taking space on the dashboard.
 - Create student logins.
 - Reset student passwords.
 - Remove student access after course completion.
@@ -242,7 +243,7 @@ On this Windows workspace, `START-AGBS-LIBRARY.cmd` can also start the local ser
 5. Keep student uploads disabled.
 6. Upload books from the admin dashboard in batches.
 7. Watch the admin storage panel after uploads.
-8. Use skipped duplicate records to clean repeated files.
+8. Use the upload log to notice repeated files while keeping the admin dashboard clean.
 9. Use classification exports for library cataloging and bibliography reports.
 10. Configure Google OAuth later if Gmail sign-in is required.
 11. Add deeper PDF/EPUB page-location tracking later if needed.

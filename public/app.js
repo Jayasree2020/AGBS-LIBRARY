@@ -21,15 +21,30 @@ const state = {
 
 const app = document.querySelector("#app");
 
+class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function api(path, options = {}) {
+  const baseHeaders = options.body instanceof FormData ? {} : { "Content-Type": "application/json" };
+  const headers = { ...baseHeaders, ...(options.headers || {}) };
   const response = await fetch(path, {
-    headers: options.body instanceof FormData ? {} : { "Content-Type": "application/json" },
     ...options,
+    headers,
+    credentials: "same-origin",
     body: options.body instanceof FormData ? options.body : options.body ? JSON.stringify(options.body) : undefined
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Request failed.");
+  if (!response.ok) throw new ApiError(data.error || "Request failed.", response.status);
   return data;
+}
+
+function isAuthError(error) {
+  return error?.status === 401 || error?.status === 403 || /login required|admin access required/i.test(error?.message || "");
 }
 
 function isZipFile(file) {
@@ -86,7 +101,7 @@ async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, l
     form.append("fileIndex", "0");
     form.append("chunkIndex", String(chunkIndex));
     form.append("chunk", chunk, `0-${chunkIndex}.part`);
-    await api("/api/resources/upload-chunk", { method: "POST", body: form, signal });
+    await api("/api/resources/upload-chunk", { method: "POST", body: form, signal, headers: uploadAuthHeaders() });
     onProgress(`${label} ${filename}: ${chunkIndex + 1} of ${metadata.totalChunks} steps.`);
   }
   return { uploadId, metadata };
@@ -108,14 +123,19 @@ async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgres
         autoCategorize: options.autoCategorize,
         targetCategoryId: options.targetCategoryId
       },
-      signal
+      signal,
+      headers: uploadAuthHeaders()
     });
   } catch (error) {
     if (uploadId && error.name === "AbortError") {
-      await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId } }).catch(() => {});
+      await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId }, headers: uploadAuthHeaders() }).catch(() => {});
     }
     throw error;
   }
+}
+
+function uploadAuthHeaders() {
+  return state.activeUpload?.token ? { "X-Upload-Token": state.activeUpload.token } : {};
 }
 
 async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, onEntrySaved, signal) {
@@ -159,6 +179,7 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
       onEntrySaved?.({ ...data, progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.` }, fileIndex + 1, totalFiles);
     } catch (error) {
       if (error.name === "AbortError") throw error;
+      if (isAuthError(error)) throw error;
       const failed = { filename: entry.name, reason: error.message };
       totals.failed.push(failed);
       onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.` }, fileIndex + 1, totalFiles);
@@ -189,6 +210,7 @@ async function uploadChunked(files, options, onProgress, onFileSaved, signal) {
       onFileSaved?.(data, fileIndex + 1, files.length);
     } catch (error) {
       if (error.name === "AbortError") throw error;
+      if (isAuthError(error)) throw error;
       const filename = uploadFilename(files[fileIndex]);
       totals.failed.push({ filename, reason: error.message });
       onFileSaved?.({ resources: [], skipped: [], failed: [{ filename, reason: error.message }] }, fileIndex + 1, files.length);
@@ -296,7 +318,7 @@ function wireUploadDock() {
     const upload = state.activeUpload;
     upload?.controller?.abort();
     setUploadActivityStatus("Stopping upload...");
-    if (upload?.uploadId) await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId: upload.uploadId } }).catch(() => {});
+    if (upload?.uploadId) await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId: upload.uploadId }, headers: uploadAuthHeaders() }).catch(() => {});
   });
   document.querySelector("[data-hide-upload-dock]")?.addEventListener("click", () => {
     state.uploadActivity = { running: false, status: "", logs: [], added: 0, skipped: 0, failed: 0 };
@@ -600,9 +622,8 @@ async function endReading() {
 
 async function adminPage() {
   if (!["admin", "director"].includes(state.user?.role)) return layout(`<main class="page"><div class="notice">Admin access required.</div></main>`);
-  const [reports, skipped] = await Promise.all([api("/api/reports"), api("/api/skipped-uploads"), loadCategories(), loadAdminSummary(), loadStorageUsage()]);
+  const [reports] = await Promise.all([api("/api/reports"), loadCategories(), loadAdminSummary(), loadStorageUsage()]);
   state.reports = reports || { users: [], reads: [], logins: [], resources: [] };
-  state.skippedUploads = Array.isArray(skipped.skipped) ? skipped.skipped : [];
   layout(`
     <main class="page">
       <h1>Admin Dashboard</h1>
@@ -678,8 +699,6 @@ async function adminPage() {
         <thead><tr><th>Title</th><th>Category</th><th>Dewey</th><th>Format</th><th>Action</th></tr></thead>
         <tbody>${resourceRowsHtml()}</tbody>
       </table>
-      <h2>Skipped duplicate uploads</h2>
-      <div id="skippedUploadsWrap">${skippedUploadsTable()}</div>
       <h2>Student accounts</h2>
       <div id="studentAccountsWrap">${studentAccountsTable()}</div>
       <h2>Student history</h2>
@@ -756,24 +775,6 @@ function adminResourceRow(resource) {
         <button class="danger" data-remove="${resource.id}">Remove</button>
       </td>
     </tr>
-  `;
-}
-
-function skippedUploadsTable() {
-  const rows = state.skippedUploads.map((item) => `
-    <tr>
-      <td>${escapeHtml(item.filename)}</td>
-      <td>${escapeHtml(item.reason)}</td>
-      <td>${formatBytes(item.size)}</td>
-      <td>${escapeHtml(new Date(item.createdAt).toLocaleString())}</td>
-      <td><button class="danger" data-remove-skipped="${item.id}">Remove</button></td>
-    </tr>
-  `).join("");
-  return `
-    <table class="table">
-      <thead><tr><th>File</th><th>Reason</th><th>Size</th><th>Skipped at</th><th>Action</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="5">No skipped duplicate uploads yet.</td></tr>`}</tbody>
-    </table>
   `;
 }
 
@@ -856,7 +857,7 @@ function wireAdmin() {
     addUploadLog("Upload stop requested.");
     if (state.activeUpload?.uploadId) {
       try {
-        await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId: state.activeUpload.uploadId } });
+        await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId: state.activeUpload.uploadId }, headers: uploadAuthHeaders() });
       } catch {
         addUploadLog("Temporary upload cleanup will finish automatically.");
       }
@@ -876,7 +877,8 @@ function wireAdmin() {
     };
     try {
       uploadController = new AbortController();
-      state.activeUpload = { controller: uploadController };
+      const uploadSession = await api("/api/resources/upload-token", { method: "POST" });
+      state.activeUpload = { controller: uploadController, token: uploadSession.uploadToken };
       state.uploadActivity = { running: true, status: "Uploading...", logs: [], added: 0, skipped: 0, failed: 0 };
       uploadButton.disabled = true;
       clearUploadButton.disabled = true;
@@ -909,11 +911,8 @@ function wireAdmin() {
             }
             refreshStorageUsage().catch(() => {});
           }
-          state.skippedUploads = [...(Array.isArray(state.skippedUploads) ? state.skippedUploads : []), ...skipped];
           refreshResourceReviewTable();
-          refreshSkippedUploadsTable();
           wireResourceActions();
-          wireSkippedUploadActions();
         }, uploadController.signal);
       } else {
         const form = new FormData();
@@ -923,7 +922,7 @@ function wireAdmin() {
           form.append("files", file, uploadFilename(file));
         }
         files.forEach((file) => addUploadLog(`Uploading ${uploadFilename(file)}`));
-        data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal });
+        data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal, headers: uploadAuthHeaders() });
       }
       const skippedCount = data.skipped?.length || 0;
       const failedCount = data.failed?.length || 0;
@@ -941,19 +940,17 @@ function wireAdmin() {
       }
       try {
         await loadAdminSummary();
-        state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
         refreshResourceReviewTable();
         await refreshStorageUsage();
-        refreshSkippedUploadsTable();
         wireResourceActions();
-        wireSkippedUploadActions();
       } catch {
         addUploadLog("Upload finished. Refresh the admin page if the newest list is not visible yet.");
       }
     } catch (error) {
       const stopped = error.name === "AbortError";
-      setUploadActivityStatus(stopped ? "Upload stopped." : error.message);
-      addUploadLog(stopped ? "Upload stopped before completion." : `Error: ${error.message}`);
+      const authLost = isAuthError(error);
+      setUploadActivityStatus(stopped ? "Upload stopped." : authLost ? "Upload paused because login was lost. Sign in again, then continue with the remaining files." : error.message);
+      addUploadLog(stopped ? "Upload stopped before completion." : authLost ? "Login was lost during upload. Already added books remain in the library; sign in again before continuing." : `Error: ${error.message}`);
     } finally {
       uploadButton.disabled = false;
       stopUploadButton.disabled = true;
@@ -990,7 +987,6 @@ function wireAdmin() {
     }
   });
   wireResourceActions();
-  wireSkippedUploadActions();
   wireStudentActions();
 }
 
@@ -1007,11 +1003,6 @@ function resourceRowsHtml() {
     .sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")))
     .slice(0, 25);
   return resources.length ? resources.map(adminResourceRow).join("") : `<tr><td colspan="5">No uploaded resources yet.</td></tr>`;
-}
-
-function refreshSkippedUploadsTable() {
-  const wrap = document.querySelector("#skippedUploadsWrap");
-  if (wrap) wrap.innerHTML = skippedUploadsTable();
 }
 
 function refreshStudentAccountsTable() {
@@ -1050,27 +1041,6 @@ function wireStudentActions() {
       await api(`/api/users/${button.dataset.removeUser}`, { method: "DELETE" });
       state.reports = await api("/api/reports");
       refreshStudentAccountsTable();
-    });
-  });
-}
-
-function wireSkippedUploadActions() {
-  document.querySelectorAll("[data-remove-skipped]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      const originalText = button.textContent;
-      button.textContent = "Removing...";
-      try {
-        await api(`/api/skipped-uploads/${button.dataset.removeSkipped}`, { method: "DELETE" });
-        button.closest("tr")?.remove();
-        state.skippedUploads = (await api("/api/skipped-uploads")).skipped || [];
-        refreshSkippedUploadsTable();
-        wireSkippedUploadActions();
-      } catch (error) {
-        button.disabled = false;
-        button.textContent = originalText;
-        alert(error.message);
-      }
     });
   });
 }
