@@ -345,6 +345,31 @@ label {
   font-size: 13px;
 }
 
+.upload-progress {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf1;
+}
+
+.upload-progress[hidden] {
+  display: none;
+}
+
+.upload-progress progress {
+  width: 100%;
+  height: 14px;
+  accent-color: var(--brand);
+}
+
+.upload-progress span {
+  color: var(--brand-strong);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .upload-log:empty {
   display: none;
 }

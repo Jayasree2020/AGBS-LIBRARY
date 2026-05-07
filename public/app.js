@@ -18,7 +18,9 @@ const state = {
     skippedDetails: [],
     added: 0,
     skipped: 0,
-    failed: 0
+    failed: 0,
+    progressCompleted: 0,
+    progressTotal: 0
   }
 };
 
@@ -300,7 +302,7 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
   if (!supportedEntries.length) {
     const failed = { filename: zipName, reason: "No supported PDF or EPUB files were found inside this ZIP." };
     totals.failed.push(failed);
-    onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${zipName}: no supported files found.` }, fileIndex + 1, totalFiles);
+    onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${zipName}: no supported files found.`, progressCompleted: 1, progressTotal: 1 }, fileIndex + 1, totalFiles);
     return totals;
   }
   for (let entryIndex = 0; entryIndex < supportedEntries.length; entryIndex++) {
@@ -317,7 +319,7 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
       if (duplicate.skipped) {
         totals.skipped.push(duplicate.skipped);
         await removeUploadQueueFile(extracted);
-        onEntrySaved?.({ resources: [], skipped: [duplicate.skipped], failed: [], progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.` }, fileIndex + 1, totalFiles);
+        onEntrySaved?.({ resources: [], skipped: [duplicate.skipped], failed: [], progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.`, progressCompleted: entryIndex + 1, progressTotal: supportedEntries.length }, fileIndex + 1, totalFiles);
         continue;
       }
       onProgress(`Uploading ${entry.name} from ZIP into the library...`);
@@ -328,13 +330,13 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
       totals.resources.push(...addedResources);
       totals.skipped.push(...skipped);
       totals.failed.push(...failed);
-      onEntrySaved?.({ ...data, progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.` }, fileIndex + 1, totalFiles);
+      onEntrySaved?.({ ...data, progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.`, progressCompleted: entryIndex + 1, progressTotal: supportedEntries.length }, fileIndex + 1, totalFiles);
     } catch (error) {
       if (error.name === "AbortError") throw error;
       if (isAuthError(error)) throw error;
       const failed = { filename: entry.name, reason: error.message };
       totals.failed.push(failed);
-      onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.` }, fileIndex + 1, totalFiles);
+      onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.`, progressCompleted: entryIndex + 1, progressTotal: supportedEntries.length }, fileIndex + 1, totalFiles);
     }
   }
   return totals;
@@ -358,7 +360,7 @@ async function uploadChunked(files, options, onProgress, onFileSaved, signal, on
       const duplicate = await duplicateSkipForFile(currentFile, seenHashes, knownHashes);
       if (duplicate.skipped) {
         totals.skipped.push(duplicate.skipped);
-        onFileSaved?.({ resources: [], skipped: [duplicate.skipped], failed: [] }, fileIndex + 1, files.length);
+        onFileSaved?.({ resources: [], skipped: [duplicate.skipped], failed: [], progressCompleted: fileIndex + 1, progressTotal: files.length }, fileIndex + 1, files.length);
         await onTopFileDone?.(currentFile);
         continue;
       }
@@ -369,14 +371,14 @@ async function uploadChunked(files, options, onProgress, onFileSaved, signal, on
       totals.resources.push(...addedResources);
       totals.skipped.push(...skipped);
       totals.failed.push(...failed);
-      onFileSaved?.(data, fileIndex + 1, files.length);
+      onFileSaved?.({ ...data, progressCompleted: fileIndex + 1, progressTotal: files.length }, fileIndex + 1, files.length);
       await onTopFileDone?.(currentFile);
     } catch (error) {
       if (error.name === "AbortError") throw error;
       if (isAuthError(error)) throw error;
       const filename = uploadFilename(currentFile);
       totals.failed.push({ filename, reason: error.message });
-      onFileSaved?.({ resources: [], skipped: [], failed: [{ filename, reason: error.message }] }, fileIndex + 1, files.length);
+      onFileSaved?.({ resources: [], skipped: [], failed: [{ filename, reason: error.message }], progressCompleted: fileIndex + 1, progressTotal: files.length }, fileIndex + 1, files.length);
     }
   }
   return totals;
@@ -437,6 +439,27 @@ function layout(content) {
 function setUploadActivityStatus(message) {
   state.uploadActivity.status = message;
   document.querySelector("#uploadStatus") && (document.querySelector("#uploadStatus").textContent = message);
+}
+
+function setUploadProgress(completed = 0, total = 0) {
+  const safeTotal = Math.max(0, Number(total || 0));
+  const safeCompleted = Math.max(0, Math.min(safeTotal, Number(completed || 0)));
+  state.uploadActivity.progressCompleted = safeCompleted;
+  state.uploadActivity.progressTotal = safeTotal;
+  const wrap = document.querySelector("#uploadProgressWrap");
+  const bar = document.querySelector("#uploadProgressBar");
+  const text = document.querySelector("#uploadProgressText");
+  if (!wrap || !bar || !text) return;
+  if (!safeTotal) {
+    wrap.hidden = true;
+    bar.value = 0;
+    text.textContent = "";
+    return;
+  }
+  const percent = Math.round((safeCompleted / safeTotal) * 100);
+  wrap.hidden = false;
+  bar.value = percent;
+  text.textContent = `${percent}% complete (${safeCompleted} of ${safeTotal} books checked)`;
 }
 
 function addUploadActivityLog(message) {
@@ -889,6 +912,10 @@ async function adminPage() {
             </div>
             <p class="subtle" id="uploadSelection">No files selected.</p>
             <p class="subtle" id="uploadStatus"></p>
+            <div class="upload-progress" id="uploadProgressWrap" hidden>
+              <progress id="uploadProgressBar" value="0" max="100"></progress>
+              <span id="uploadProgressText"></span>
+            </div>
             <div class="upload-log" id="uploadLog"></div>
           </form>
         </div>
@@ -1168,6 +1195,7 @@ function wireAdmin() {
       clearUploadButton.disabled = true;
       stopUploadButton.disabled = false;
       uploadLog.innerHTML = "";
+      setUploadProgress(0, files.length);
       setUploadActivityStatus("Checking duplicates before upload...");
       const knownHashes = await loadResourceHashes().catch(() => state.resourceHashes || new Set());
       addUploadLog(`Duplicate check loaded. Uploading only new PDF/EPUB files.`);
@@ -1186,6 +1214,7 @@ function wireAdmin() {
           recordSkippedUploadDetails(skipped);
           failed.forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
           const progressLabel = partial.progressLabel || `${completed} of ${total} file(s) checked.`;
+          setUploadProgress(partial.progressCompleted || completed, partial.progressTotal || total);
           state.uploadActivity.added += addedResources.length;
           state.uploadActivity.skipped += skipped.length;
           state.uploadActivity.failed += failed.length;
@@ -1211,6 +1240,7 @@ function wireAdmin() {
           if (duplicate.skipped) {
             clientSkipped.push(duplicate.skipped);
             await markUploadFileFinished(file);
+            setUploadProgress(clientSkipped.length, files.length);
           } else {
             uploadFiles.push(file);
           }
@@ -1228,6 +1258,7 @@ function wireAdmin() {
         data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal, headers: uploadAuthHeaders() });
         data.skipped = [...clientSkipped, ...(Array.isArray(data.skipped) ? data.skipped : [])];
         }
+        setUploadProgress(files.length, files.length);
         await clearUploadQueueFiles();
       }
       const skippedCount = data.skipped?.length || 0;
@@ -1240,6 +1271,7 @@ function wireAdmin() {
         addedResources.forEach((resource) => resource.metadata?.hash && knownHashes.add(resource.metadata.hash));
       }
       const completionMessage = `Upload completed. Added: ${addedResources.length}. Skipped: ${skippedCount}. Failed: ${failedCount}.`;
+      setUploadProgress(state.uploadActivity.progressTotal || files.length, state.uploadActivity.progressTotal || files.length);
       setUploadActivityStatus(completionMessage);
       if (!streamingUpload) {
         addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
@@ -1259,6 +1291,7 @@ function wireAdmin() {
       await clearUploadQueueFiles();
       clearRememberedUploadState();
       updateUploadSelection();
+      setUploadProgress(state.uploadActivity.progressTotal || files.length, state.uploadActivity.progressTotal || files.length);
       window.alert(`${completionMessage}\n\nYou can now upload a new file or folder.`);
     } catch (error) {
       const stopped = error.name === "AbortError";
