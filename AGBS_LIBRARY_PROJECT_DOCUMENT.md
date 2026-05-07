@@ -11,7 +11,7 @@ Admins manage:
 - Student accounts.
 - File updates/removal.
 - Category correction from the Library search view.
-- Duplicate skipping during upload.
+- Exact duplicate PDF/EPUB files are skipped during upload.
 - Classification and bibliography exports.
 - Usage reports.
 - AWS storage tracking.
@@ -184,9 +184,9 @@ Current upload behavior:
 - Each supported file is treated as an e-book resource.
 - Uploads are automatically published.
 - No publish button is required.
-- Duplicate files are skipped.
-- Skipped duplicates appear in the upload log during upload.
-- The admin dashboard does not keep showing a permanent skipped duplicate table.
+- Exact duplicate PDF/EPUB files are skipped by file hash.
+- Similar filename or similar file size alone does not skip a book.
+- Files are skipped only when they are not PDF/EPUB.
 - Book count updates after upload.
 - Storage usage updates after upload.
 
@@ -218,22 +218,23 @@ Recommended admin practice:
 - Keep the browser tab open during upload.
 - Use the upload stop button if a wrong folder/file was selected.
 - Use the clear selected files button before upload if the wrong file was chosen.
-- Check the upload log for skipped duplicate messages during upload.
+- Check the upload log only for unsupported file type messages during upload.
 - Check storage left after each major batch.
 
 ## 8. Duplicate Handling
 
-The app checks duplicates using:
+The app stores a file hash and uses it to skip only exact duplicate PDF/EPUB files.
 
-- File hash.
-- Normalized filename plus file size.
+If the exact same file already exists:
 
-If a duplicate is found:
+- The duplicate PDF/EPUB is skipped.
+- The upload log shows the duplicate reason.
 
-- The file is not added again.
-- A skipped upload record is created.
-- The upload log tells the admin that the file was skipped.
-- The dashboard stays clean and does not show a separate skipped duplicate table.
+If only the filename or size looks similar:
+
+- The PDF/EPUB is still added.
+- Admins can later remove unwanted copies manually if needed.
+- Unsupported JPG/PNG/WEBP/GIF and other files are still skipped.
 
 This keeps the student library clean and avoids repeated book entries.
 
@@ -444,7 +445,7 @@ When continuing this project:
 - Keep admin routes protected server-side.
 - Keep AWS S3 as the production storage system.
 - Do not reintroduce R2 or MongoDB unless a deliberate migration is planned.
-- Test upload, duplicate skip, view, replace, remove, export, and student reading after major changes.
+- Test upload, view, replace, remove, export, and student reading after major changes.
 - Push confirmed changes to GitHub.
 - Deploy to Vercel after code changes.
 
@@ -459,8 +460,8 @@ Before saying a deployment is ready:
 - Test file can be viewed through protected route.
 - Test file can be removed.
 - Student search does not show all books until search/category is used.
-- Duplicate upload is skipped.
-- Duplicate upload is reported in the upload log.
+- Exact duplicate PDF/EPUB upload is skipped.
+- Same-name but different-content PDF/EPUB upload is added.
 - HTML export downloads.
 - Word export downloads.
 - Storage panel loads.

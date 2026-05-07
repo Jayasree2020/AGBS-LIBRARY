@@ -692,18 +692,16 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
   const resourceRecords = [];
   const skippedRecords = [];
   const existingResources = await db.all("resources");
-  const seenKeys = new Set(existingResources.map(resourceDuplicateKey).filter(Boolean));
   const seenHashes = new Set(existingResources.map((resource) => resource.metadata?.hash).filter(Boolean));
   for (const file of files) {
     const extension = path.extname(file.filename).toLowerCase();
     const hash = fileHash(file.content);
-    const duplicateKey = uploadDuplicateKey(file.filename, file.content.length);
     if (!allowedResourceExtensions.includes(extension)) {
       skippedRecords.push(buildSkippedUpload({ file, reason: "Only PDF and EPUB files are allowed", user, batch, hash }));
       continue;
     }
-    if (seenHashes.has(hash) || seenKeys.has(duplicateKey)) {
-      skippedRecords.push(buildSkippedUpload({ file, reason: "Duplicate file already exists in the library", user, batch, hash }));
+    if (seenHashes.has(hash)) {
+      skippedRecords.push(buildSkippedUpload({ file, reason: "Exact duplicate PDF/EPUB already exists in the library", user, batch, hash }));
       continue;
     }
     const category = autoCategorize ? (categoryForFile(file.filename, categories) || selectedCategory) : selectedCategory;
@@ -733,10 +731,9 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       uploadBatchId: batch.id,
       createdBy: user.id,
       inlineContent: shouldInlineFiles() && file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
-      metadata: { size: file.content.length, contentType: file.contentType, hash }
+      metadata: { size: file.content.length, contentType: file.contentType, hash, duplicateCheck: "exact-hash" }
     });
     seenHashes.add(hash);
-    seenKeys.add(duplicateKey);
   }
   const saved = typeof db.insertMany === "function" ? await db.insertMany("resources", resourceRecords) : [];
   const skipped = typeof db.insertMany === "function" ? await db.insertMany("skippedUploads", skippedRecords) : [];
@@ -1100,8 +1097,7 @@ async function replaceResourceFile(resource, file, user) {
   if (!allowedResourceExtensions.includes(extension)) throw new Error("Choose a supported PDF or EPUB file.");
   const existingResources = await db.all("resources");
   const hash = fileHash(file.content);
-  const duplicateKey = uploadDuplicateKey(file.filename, file.content.length);
-  const duplicate = existingResources.find((item) => item.id !== resource.id && (item.metadata?.hash === hash || resourceDuplicateKey(item) === duplicateKey));
+  const duplicate = existingResources.find((item) => item.id !== resource.id && item.metadata?.hash === hash);
   if (duplicate) throw new Error("This file already exists in the library, so it was not added again.");
   const storageName = `${crypto.randomUUID()}${extension}`;
   if (typeof db.saveFile === "function") {

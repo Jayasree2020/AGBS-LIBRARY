@@ -14,7 +14,7 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 - R2 and MongoDB are not part of the current production setup.
 - Uploaded books are stored in AWS as complete files, not visible upload parts.
 - Admin uploads are automatically published into the library.
-- Duplicate files are skipped automatically without keeping a permanent duplicate table on the admin dashboard.
+- Valid PDF/EPUB files are added unless the exact same file already exists.
 - The admin dashboard shows total storage left and estimated month runway for a 12-month AWS storage plan.
 
 ## What The App Does
@@ -77,8 +77,9 @@ Upload behavior:
 
 - Every supported file is saved as an e-book resource.
 - Uploads are automatically published.
-- Duplicates are skipped by file hash or normalized filename plus size.
-- Skipped duplicates are reported in the upload log, but the dashboard no longer keeps showing a separate duplicate upload table.
+- Exact duplicate PDFs/EPUBs are skipped by file hash.
+- Similar filenames or similar file sizes are not enough to skip a book.
+- Files are skipped only when they are not PDF/EPUB.
 - Admins can clear selected files before starting an upload.
 - Admins can stop an upload while it is running.
 - After upload, the admin can still use other dashboard actions.
@@ -127,7 +128,7 @@ Admins can:
 - Update title and category.
 - Replace an existing file.
 - Remove a file from the library and storage.
-- Continue uploading without a permanent skipped-duplicates section taking space on the dashboard.
+- Continue uploading valid PDFs/EPUBs while skipping only exact duplicate files.
 - Create student logins.
 - Reset student passwords.
 - Remove student access after course completion.
