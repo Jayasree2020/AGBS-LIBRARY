@@ -166,6 +166,7 @@ Admins can upload:
 - One file.
 - Many selected files.
 - A whole folder.
+- Multiple file/folder selections before pressing upload.
 - A ZIP archive.
 
 Supported formats:
@@ -189,6 +190,7 @@ Current upload behavior:
 - Files are skipped only when they are not PDF/EPUB.
 - Book count updates after upload.
 - Storage usage updates after upload.
+- A completion popup appears when upload is finished.
 
 ## 7. Large Upload Plan
 
@@ -243,7 +245,8 @@ This keeps the student library clean and avoids repeated book entries.
 Every uploaded e-book should receive:
 
 - Dewey Decimal-style number.
-- Dewey class label.
+- Detailed DDC/Dewey Decimal-style number.
+- DDC/Dewey class label.
 - Call number.
 - Title.
 - Author when safely detected.

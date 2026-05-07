@@ -65,6 +65,7 @@ Admins can upload:
 - A single PDF or EPUB.
 - Multiple files.
 - A folder of files.
+- Multiple folder/file selections before pressing upload.
 - A ZIP archive.
 
 Supported file types:
@@ -82,6 +83,8 @@ Upload behavior:
 - Files are skipped only when they are not PDF/EPUB.
 - Admins can clear selected files before starting an upload.
 - Admins can stop an upload while it is running.
+- Admins can choose files/folders more than once before upload; each selection is added to the same upload queue.
+- A completion popup appears when the upload finishes.
 - After upload, the admin can still use other dashboard actions.
 - The book count and storage panel update after upload.
 
@@ -98,8 +101,8 @@ Large upload behavior:
 
 Every uploaded e-book receives:
 
-- Dewey Decimal-style class number.
-- Dewey class label.
+- Detailed DDC/Dewey Decimal-style class number.
+- DDC/Dewey class label.
 - Call number.
 - Title.
 - Author, when detected safely.

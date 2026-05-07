@@ -9,6 +9,7 @@ const state = {
   reports: null,
   readingSessionId: null,
   activeUpload: null,
+  pendingUploadFiles: [],
   uploadActivity: {
     running: false,
     status: "",
@@ -133,6 +134,25 @@ async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgres
 
 function uploadAuthHeaders() {
   return state.activeUpload?.token ? { "X-Upload-Token": state.activeUpload.token } : {};
+}
+
+function uploadFileKey(file) {
+  return `${uploadFilename(file)}::${file.size}::${file.lastModified || 0}`;
+}
+
+function addPendingUploadFiles(files) {
+  const incoming = Array.from(files || []);
+  if (!incoming.length) return 0;
+  const existing = new Set(state.pendingUploadFiles.map(uploadFileKey));
+  const added = [];
+  for (const file of incoming) {
+    const key = uploadFileKey(file);
+    if (existing.has(key)) continue;
+    existing.add(key);
+    added.push(file);
+  }
+  state.pendingUploadFiles.push(...added);
+  return added.length;
 }
 
 async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, onEntrySaved, signal) {
@@ -910,7 +930,7 @@ function wireAdmin() {
   const addUploadLog = (message) => {
     addUploadActivityLog(message);
   };
-  const selectedUploadFiles = () => [...resourceInput.files, ...folderInput.files];
+  const selectedUploadFiles = () => state.pendingUploadFiles;
   const updateUploadSelection = () => {
     const files = selectedUploadFiles();
     const totalSize = files.reduce((sum, file) => sum + file.size, 0);
@@ -925,10 +945,21 @@ function wireAdmin() {
     uploadStatus.textContent = message;
     clearUploadButton.disabled = !files.length || Boolean(uploadController);
   };
-  resourceInput.addEventListener("change", updateUploadSelection);
-  folderInput.addEventListener("change", updateUploadSelection);
+  resourceInput.addEventListener("change", () => {
+    const added = addPendingUploadFiles(resourceInput.files);
+    resourceInput.value = "";
+    updateUploadSelection();
+    if (added) addUploadLog(`Added ${added} selected file(s) to the upload queue.`);
+  });
+  folderInput.addEventListener("change", () => {
+    const added = addPendingUploadFiles(folderInput.files);
+    folderInput.value = "";
+    updateUploadSelection();
+    if (added) addUploadLog(`Added ${added} file(s) from folder selection to the upload queue.`);
+  });
   clearUploadButton.addEventListener("click", () => {
     if (uploadController) return;
+    state.pendingUploadFiles = [];
     resourceInput.value = "";
     folderInput.value = "";
     uploadLog.innerHTML = "";
@@ -1020,7 +1051,8 @@ function wireAdmin() {
         state.uploadActivity.skipped += skippedCount;
         state.uploadActivity.failed += failedCount;
       }
-      setUploadActivityStatus(`${addedResources.length} file(s) added to the library. ${skippedCount} skipped. ${failedCount} failed.`);
+      const completionMessage = `Upload completed. Added: ${addedResources.length}. Skipped: ${skippedCount}. Failed: ${failedCount}.`;
+      setUploadActivityStatus(completionMessage);
       if (!streamingUpload) {
         addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
         (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
@@ -1035,6 +1067,9 @@ function wireAdmin() {
       } catch {
         addUploadLog("Upload finished. Refresh the admin page if the newest list is not visible yet.");
       }
+      state.pendingUploadFiles = [];
+      updateUploadSelection();
+      window.alert(completionMessage);
     } catch (error) {
       const stopped = error.name === "AbortError";
       const authLost = isAuthError(error);
