@@ -704,6 +704,7 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
   const resourceRecords = [];
   const skippedRecords = [];
   const existingResources = await db.all("resources");
+  const seenHashes = new Map(existingResources.map((resource) => [resource.metadata?.hash, resource]).filter(([hash]) => Boolean(hash)));
   for (const file of files) {
     const extension = resourceExtensionFor(file);
     const hash = fileHash(file.content);
@@ -711,7 +712,17 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       skippedRecords.push(buildSkippedUpload({ file, reason: "Only PDF and EPUB files are allowed", user, batch, hash }));
       continue;
     }
-    const duplicateOf = existingResources.find((resource) => resource.metadata?.hash === hash)?.id || "";
+    const duplicate = seenHashes.get(hash);
+    if (duplicate) {
+      skippedRecords.push(buildSkippedUpload({
+        file,
+        reason: `Exact duplicate already exists: ${duplicate.title || duplicate.originalFilename || "same file"}`,
+        user,
+        batch,
+        hash
+      }));
+      continue;
+    }
     const category = autoCategorize ? (categoryForFile(file.filename, categories) || selectedCategory) : selectedCategory;
     const suggested = category?.name || selectedCategory?.name || "";
     const storageName = `${crypto.randomUUID()}${extension}`;
@@ -739,8 +750,9 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       uploadBatchId: batch.id,
       createdBy: user.id,
       inlineContent: shouldInlineFiles() && file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
-      metadata: { size: file.content.length, contentType: file.contentType, hash, duplicateCheck: "marked-only", duplicateOf }
+      metadata: { size: file.content.length, contentType: file.contentType, hash, duplicateCheck: "exact-hash" }
     });
+    seenHashes.set(hash, { title, originalFilename: file.filename, metadata: { hash } });
   }
   const saved = typeof db.insertMany === "function" ? await db.insertMany("resources", resourceRecords) : [];
   const skipped = typeof db.insertMany === "function" ? await db.insertMany("skippedUploads", skippedRecords) : [];
@@ -1085,7 +1097,7 @@ function buildSkippedUpload({ file, reason, user, batch, hash }) {
   return {
     filename: file.filename,
     normalizedFilename: normalizeFilename(file.filename),
-    reason,
+    reason: reason || "Skipped by upload validation",
     uploadBatchId: batch.id,
     createdBy: user.id,
     size: file.content.length,
@@ -1105,6 +1117,7 @@ async function replaceResourceFile(resource, file, user) {
   const existingResources = await db.all("resources");
   const hash = fileHash(file.content);
   const duplicate = existingResources.find((item) => item.id !== resource.id && item.metadata?.hash === hash);
+  if (duplicate) throw new Error(`Exact duplicate already exists: ${duplicate.title || duplicate.originalFilename || "same file"}.`);
   const storageName = `${crypto.randomUUID()}${extension}`;
   if (typeof db.saveFile === "function") {
     await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
@@ -1129,7 +1142,7 @@ async function replaceResourceFile(resource, file, user) {
     bibliography: buildBibliography({ title, author, format: extension.slice(1), originalFilename: file.filename, category, classification }),
     updatedBy: user.id,
     inlineContent: shouldInlineFiles() && file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
-    metadata: { size: file.content.length, contentType: file.contentType, hash, duplicateCheck: "marked-only", duplicateOf: duplicate?.id || "" }
+    metadata: { size: file.content.length, contentType: file.contentType, hash, duplicateCheck: "exact-hash" }
   });
 }
 

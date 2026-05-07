@@ -308,7 +308,7 @@ function recordSkippedUploadDetails(items) {
   if (!skipped.length) return;
   state.uploadActivity.skippedDetails.push(...skipped.map((item) => ({
     filename: item.filename || "Unknown file",
-    reason: item.reason || "Skipped"
+    reason: item.reason || "Skipped by upload validation"
   })));
   state.uploadActivity.skippedDetails = state.uploadActivity.skippedDetails.slice(-25);
   refreshSkippedDetails();
@@ -1024,7 +1024,7 @@ function wireAdmin() {
           const skipped = Array.isArray(partial.skipped) ? partial.skipped : [];
           const failed = Array.isArray(partial.failed) ? partial.failed : [];
           addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
-          skipped.forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
+          skipped.forEach((item) => addUploadLog(`Skipped: ${item.filename || "Unknown file"} (${item.reason || "Skipped by upload validation"})`));
           recordSkippedUploadDetails(skipped);
           failed.forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
           const progressLabel = partial.progressLabel || `${completed} of ${total} file(s) checked.`;
@@ -1065,7 +1065,7 @@ function wireAdmin() {
       setUploadActivityStatus(completionMessage);
       if (!streamingUpload) {
         addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
-        (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
+        (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename || "Unknown file"} (${item.reason || "Skipped by upload validation"})`));
         recordSkippedUploadDetails(data.skipped || []);
         (data.failed || []).forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
       }
