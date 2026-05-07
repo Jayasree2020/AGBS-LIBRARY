@@ -251,11 +251,27 @@ class ObjectStore {
 
   async exists(key) {
     try {
-      await this.client.send(new this.commands.HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      await this.s3Send(new this.commands.HeadObjectCommand({ Bucket: this.bucket, Key: key }));
       return true;
     } catch {
       return false;
     }
+  }
+
+  async s3Send(command, attempts = 5) {
+    let lastError;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        return await this.client.send(command);
+      } catch (error) {
+        lastError = error;
+        const code = error?.Code || error?.name || "";
+        const retryable = code === "SlowDown" || error?.$metadata?.httpStatusCode === 503 || error?.$retryable;
+        if (!retryable || attempt === attempts - 1) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 300 * 2 ** attempt));
+      }
+    }
+    throw lastError;
   }
 
   async bodyToBuffer(body) {
@@ -265,7 +281,7 @@ class ObjectStore {
   }
 
   async putJson(key, value) {
-    await this.client.send(new this.commands.PutObjectCommand({
+    await this.s3Send(new this.commands.PutObjectCommand({
       Bucket: this.bucket,
       Key: key,
       Body: JSON.stringify(value, null, 2),
@@ -277,7 +293,7 @@ class ObjectStore {
   async getJson(key) {
     const cached = this.jsonCache.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
-    const response = await this.client.send(new this.commands.GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    const response = await this.s3Send(new this.commands.GetObjectCommand({ Bucket: this.bucket, Key: key }));
     const value = JSON.parse((await this.bodyToBuffer(response.Body)).toString("utf8"));
     this.jsonCache.set(key, { value, expiresAt: Date.now() + this.jsonCacheMs });
     return value;
@@ -337,7 +353,7 @@ class ObjectStore {
 
   async saveFile(name, buffer, metadata = {}) {
     const extension = path.extname(name).toLowerCase();
-    await this.client.send(new this.commands.PutObjectCommand({
+    await this.s3Send(new this.commands.PutObjectCommand({
       Bucket: this.bucket,
       Key: this.fileKey(name),
       Body: buffer,
@@ -349,16 +365,16 @@ class ObjectStore {
   }
 
   async readFile(name) {
-    const response = await this.client.send(new this.commands.GetObjectCommand({ Bucket: this.bucket, Key: this.fileKey(name) }));
+    const response = await this.s3Send(new this.commands.GetObjectCommand({ Bucket: this.bucket, Key: this.fileKey(name) }));
     return await this.bodyToBuffer(response.Body);
   }
 
   async deleteFile(name) {
-    await this.client.send(new this.commands.DeleteObjectCommand({ Bucket: this.bucket, Key: this.fileKey(name) }));
+    await this.s3Send(new this.commands.DeleteObjectCommand({ Bucket: this.bucket, Key: this.fileKey(name) }));
   }
 
   async saveTempChunk(uploadId, fileIndex, chunkIndex, buffer) {
-    await this.client.send(new this.commands.PutObjectCommand({
+    await this.s3Send(new this.commands.PutObjectCommand({
       Bucket: this.bucket,
       Key: this.tempChunkKey(uploadId, fileIndex, chunkIndex),
       Body: buffer,
@@ -368,7 +384,7 @@ class ObjectStore {
 
   async readTempChunk(uploadId, fileIndex, chunkIndex) {
     try {
-      const response = await this.client.send(new this.commands.GetObjectCommand({
+      const response = await this.s3Send(new this.commands.GetObjectCommand({
         Bucket: this.bucket,
         Key: this.tempChunkKey(uploadId, fileIndex, chunkIndex)
       }));
@@ -381,25 +397,25 @@ class ObjectStore {
   async deleteTempUpload(uploadId) {
     let ContinuationToken;
     do {
-      const response = await this.client.send(new this.commands.ListObjectsV2Command({
+      const response = await this.s3Send(new this.commands.ListObjectsV2Command({
         Bucket: this.bucket,
         Prefix: this.tempChunkKey(uploadId, ""),
         ContinuationToken
       }));
       const objects = (response.Contents || []).map((item) => ({ Key: item.Key }));
       if (objects.length) {
-        await this.client.send(new this.commands.DeleteObjectsCommand({
+        await this.s3Send(new this.commands.DeleteObjectsCommand({
           Bucket: this.bucket,
           Delete: { Objects: objects, Quiet: true }
         }));
       }
       ContinuationToken = response.NextContinuationToken;
     } while (ContinuationToken);
-    await this.client.send(new this.commands.DeleteObjectCommand({ Bucket: this.bucket, Key: this.tempZipKey(uploadId) })).catch(() => {});
+    await this.s3Send(new this.commands.DeleteObjectCommand({ Bucket: this.bucket, Key: this.tempZipKey(uploadId) })).catch(() => {});
   }
 
   async saveTempZip(uploadId, buffer) {
-    await this.client.send(new this.commands.PutObjectCommand({
+    await this.s3Send(new this.commands.PutObjectCommand({
       Bucket: this.bucket,
       Key: this.tempZipKey(uploadId),
       Body: buffer,
@@ -409,7 +425,7 @@ class ObjectStore {
 
   async readTempZip(uploadId) {
     try {
-      const response = await this.client.send(new this.commands.GetObjectCommand({
+      const response = await this.s3Send(new this.commands.GetObjectCommand({
         Bucket: this.bucket,
         Key: this.tempZipKey(uploadId)
       }));
@@ -438,7 +454,7 @@ class ObjectStore {
     const tempPrefix = this.key("tmp/");
     let ContinuationToken;
     do {
-      const response = await this.client.send(new this.commands.ListObjectsV2Command({
+      const response = await this.s3Send(new this.commands.ListObjectsV2Command({
         Bucket: this.bucket,
         Prefix: this.key(""),
         ContinuationToken

@@ -608,13 +608,19 @@ async function loadLibrary() {
 }
 
 async function loadAdminSummary() {
-  const summary = await api("/api/resources-summary");
+  const summary = await api("/api/resources-summary").catch((error) => {
+    state.adminSummaryError = error.message || "Book summary is temporarily unavailable.";
+    return { recentResources: state.resources || [], counts: state.resourceCounts || { total: 0, byCategory: {} } };
+  });
   state.resources = Array.isArray(summary.recentResources) ? summary.recentResources : [];
   state.resourceCounts = summary.counts || { total: 0, byCategory: {} };
 }
 
 async function loadStorageUsage() {
-  state.storageUsage = await api("/api/storage-usage");
+  state.storageUsage = await api("/api/storage-usage").catch((error) => {
+    state.storageUsageError = error.message || "Storage summary is temporarily unavailable.";
+    return state.storageUsage || {};
+  });
 }
 
 async function libraryPage() {
@@ -839,12 +845,25 @@ async function endReading() {
 
 async function adminPage() {
   if (!["admin", "director"].includes(state.user?.role)) return layout(`<main class="page"><div class="notice">Admin access required.</div></main>`);
-  const [reports] = await Promise.all([api("/api/reports"), loadCategories(), loadAdminSummary(), loadStorageUsage()]);
+  state.adminSummaryError = "";
+  state.storageUsageError = "";
+  const [reports] = await Promise.all([
+    api("/api/reports").catch((error) => {
+      state.adminSummaryError = error.message || "Student reports are temporarily unavailable.";
+      return state.reports || { users: [], reads: [], logins: [], resources: [] };
+    }),
+    loadCategories().catch((error) => {
+      state.adminSummaryError = error.message || "Categories are temporarily unavailable.";
+    }),
+    loadAdminSummary(),
+    loadStorageUsage()
+  ]);
   state.reports = reports || { users: [], reads: [], logins: [], resources: [] };
   layout(`
     <main class="page">
       <h1>Admin Dashboard</h1>
       <p class="subtle">Upload resources, manage library files, manage categories, and review student history.</p>
+      ${state.adminSummaryError || state.storageUsageError ? `<div class="notice">Some dashboard summaries are temporarily slow. Login is working; try the summary again after a minute.</div>` : ""}
       <section class="admin-panels">
         <div class="panel">
           <h2>Upload books</h2>
