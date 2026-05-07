@@ -353,13 +353,14 @@ class ObjectStore {
 
   async saveFile(name, buffer, metadata = {}) {
     const extension = path.extname(name).toLowerCase();
+    const originalFilename = encodeURIComponent(String(metadata.originalFilename || "")).slice(0, 1024);
     await this.s3Send(new this.commands.PutObjectCommand({
       Bucket: this.bucket,
       Key: this.fileKey(name),
       Body: buffer,
       ContentType: metadata.contentType || mimeTypes[extension] || "application/octet-stream",
       Metadata: {
-        originalFilename: String(metadata.originalFilename || "").slice(0, 1024)
+        originalFilename
       }
     }));
   }
