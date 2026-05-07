@@ -149,15 +149,14 @@ Default departments:
 - Social Analysis
 - Women Studies
 - Languages
-  - English
-  - Greek
-  - Hebrew
 - Research Methodology
 - Music
 - Homiletics
 - Pastoral Care and Counselling
 
 Admins can add more categories from the admin dashboard.
+
+Language books are organized under one visible `Languages` folder. English, Greek, and Hebrew remain automatic subcategories under that folder for cataloging and admin correction.
 
 ## 6. Upload Plan
 

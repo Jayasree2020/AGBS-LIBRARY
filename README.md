@@ -48,15 +48,14 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 - Social Analysis
 - Women Studies
 - Languages
-  - English
-  - Greek
-  - Hebrew
 - Research Methodology
 - Music
 - Homiletics
 - Pastoral Care and Counselling
 
 Admins can add more categories from the dashboard.
+
+Language books are organized under the single visible `Languages` folder. English, Greek, and Hebrew are handled as automatic subcategories under that folder for cataloging and admin correction.
 
 ## Upload Workflow
 

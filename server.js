@@ -1357,9 +1357,13 @@ async function routeApi(req, res, url) {
     const limit = Math.max(0, Math.min(200, Number(url.searchParams.get("limit") || 0)));
     const sort = url.searchParams.get("sort");
     const categories = await db.all("categories");
+    const selectedCategory = category ? categories.find((item) => item.id === category) : null;
+    const categoryIds = selectedCategory
+      ? new Set([selectedCategory.id, ...categories.filter((item) => item.parentId === selectedCategory.id || item.parentName === selectedCategory.name).map((item) => item.id)])
+      : null;
     let resources = (await db.all("resources")).filter((item) => {
       if (!isStaff(user) && item.status !== "published") return false;
-      if (category && item.categoryId !== category) return false;
+      if (categoryIds && !categoryIds.has(item.categoryId)) return false;
       if (terms.length) {
         const resourceCategory = categories.find((entry) => entry.id === item.categoryId);
         const classified = classifiedResource(item, categories);

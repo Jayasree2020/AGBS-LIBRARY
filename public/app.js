@@ -479,6 +479,17 @@ function categoryLabel(category) {
   return category.parentName ? `${category.parentName} / ${category.name}` : category.name;
 }
 
+function mainCategories() {
+  return (Array.isArray(state.categories) ? state.categories : []).filter((category) => !category.parentName);
+}
+
+function categoryAndChildIds(category) {
+  if (!category) return [];
+  return [category.id, ...(Array.isArray(state.categories) ? state.categories : [])
+    .filter((item) => item.parentId === category.id || item.parentName === category.name)
+    .map((item) => item.id)];
+}
+
 async function loadResources({ q = "", categoryId = "", limit = 0, sort = "" } = {}) {
   const params = new URLSearchParams();
   if (q) params.set("q", q);
@@ -510,6 +521,7 @@ async function libraryPage() {
   const categorySlug = params.get("category") || (route().startsWith("/library/") ? decodeURIComponent(route().split("/").pop()) : "");
   const searchText = params.get("q") || "";
   const categories = Array.isArray(state.categories) ? state.categories : [];
+  const visibleCategories = mainCategories();
   const currentCategory = categories.find((item) => item.slug === categorySlug || item.id === categorySlug);
   const terms = searchText.toLowerCase().split(/\s+/).filter(Boolean);
   const hasBrowseRequest = Boolean(currentCategory || terms.length);
@@ -528,7 +540,7 @@ async function libraryPage() {
         <label>Category
           <select id="libraryCategoryInput" name="category">
             <option value="">All categories</option>
-            ${categories.map((category) => `<option value="${category.slug}" ${currentCategory?.id === category.id ? "selected" : ""}>${escapeHtml(categoryLabel(category))}</option>`).join("")}
+            ${visibleCategories.map((category) => `<option value="${category.slug}" ${currentCategory?.id === category.id ? "selected" : ""}>${escapeHtml(categoryLabel(category))}</option>`).join("")}
           </select>
         </label>
         <button>Search</button>
@@ -536,7 +548,7 @@ async function libraryPage() {
       </form>
       <div class="toolbar">
         <button class="secondary" data-link href="/library">All</button>
-        ${categories.map((category) => `<button class="secondary ${category.parentName ? "sub-category-button" : ""}" data-link href="/library/${category.slug}">${escapeHtml(categoryLabel(category))}</button>`).join("")}
+        ${visibleCategories.map((category) => `<button class="secondary" data-link href="/library/${category.slug}">${escapeHtml(categoryLabel(category))}</button>`).join("")}
       </div>
       <table class="table library-table">
         <thead><tr><th>Title</th><th>Author</th><th>Category</th><th>Format</th><th>Action</th>${staff ? "<th>Admin edit</th>" : ""}</tr></thead>
@@ -841,9 +853,9 @@ function storageUsageSummary() {
 
 function bookCountSummary() {
   const counts = state.resourceCounts || { total: 0, byCategory: {} };
-  const categories = Array.isArray(state.categories) ? state.categories : [];
+  const categories = mainCategories();
   const categoryCards = categories.map((category) => {
-    const count = Number(counts.byCategory?.[category.id] || 0);
+    const count = categoryAndChildIds(category).reduce((sum, id) => sum + Number(counts.byCategory?.[id] || 0), 0);
     return `
       <article class="stat-card">
         <span>${escapeHtml(categoryLabel(category))}</span>
