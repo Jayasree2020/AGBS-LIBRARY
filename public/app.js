@@ -1259,6 +1259,7 @@ function wireAdmin() {
       await clearUploadQueueFiles();
       clearRememberedUploadState();
       updateUploadSelection();
+      window.alert(`${completionMessage}\n\nYou can now upload a new file or folder.`);
     } catch (error) {
       const stopped = error.name === "AbortError";
       const authLost = isAuthError(error);
