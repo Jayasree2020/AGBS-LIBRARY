@@ -301,6 +301,12 @@ label {
   margin: 0;
 }
 
+.toolbar .sub-category-button {
+  margin-left: 10px;
+  border-color: #f0cf84;
+  background: #fff7e6;
+}
+
 .button-row,
 .section-heading {
   display: flex;

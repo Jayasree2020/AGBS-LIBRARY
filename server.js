@@ -38,27 +38,28 @@ const DATA_DIR = path.join(RUNTIME_DIR, "data");
 const STORAGE_DIR = path.join(RUNTIME_DIR, "storage");
 const PUBLIC_DIR = path.join(__dirname, "public");
 
-const defaultCategories = [
-  "Old Testament",
-  "New Testament",
-  "Christian Theology",
-  "History of Christianity",
-  "Christian Ministry",
-  "Missiology",
-  "Communication",
-  "Christian Ethics",
-  "Religions",
-  "Social Analysis",
-  "Women Studies",
-  "Languages",
-  "English",
-  "Greek",
-  "Hebrew",
-  "Research Methodology",
-  "Music",
-  "Homiletics",
-  "Pastoral Care and Counselling"
+const defaultCategoryDefinitions = [
+  { name: "Old Testament" },
+  { name: "New Testament" },
+  { name: "Christian Theology" },
+  { name: "History of Christianity" },
+  { name: "Christian Ministry" },
+  { name: "Missiology" },
+  { name: "Communication" },
+  { name: "Christian Ethics" },
+  { name: "Religions" },
+  { name: "Social Analysis" },
+  { name: "Women Studies" },
+  { name: "Languages" },
+  { name: "English", parentName: "Languages" },
+  { name: "Greek", parentName: "Languages" },
+  { name: "Hebrew", parentName: "Languages" },
+  { name: "Research Methodology" },
+  { name: "Music" },
+  { name: "Homiletics" },
+  { name: "Pastoral Care and Counselling" }
 ];
+const defaultCategories = defaultCategoryDefinitions.map((category) => category.name);
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -1065,10 +1066,15 @@ function classifiedResource(resource, categories) {
     title,
     author,
     resourceType: resource.resourceType || "E-book",
-    categoryName: category?.name || "",
+    categoryName: displayCategoryName(category),
     classification,
     bibliography
   };
+}
+
+function displayCategoryName(category) {
+  if (!category) return "";
+  return category.parentName ? `${category.parentName} / ${category.name}` : category.name;
 }
 
 function buildSkippedUpload({ file, reason, user, batch, hash }) {
@@ -1210,14 +1216,22 @@ function fieldValue(parts, name, fallback = "") {
 
 async function seed() {
   let existingCategories = await db.all("categories");
-  for (let index = 0; index < defaultCategories.length; index++) {
-    const name = defaultCategories[index];
+  for (let index = 0; index < defaultCategoryDefinitions.length; index++) {
+    const definition = defaultCategoryDefinitions[index];
+    const name = definition.name;
     const existing = existingCategories.find((category) => category.name === name || category.slug === slug(name));
+    const base = { name, slug: slug(name), order: index, archived: false, parentName: definition.parentName || "", parentId: "" };
     if (existing) {
-      await db.update("categories", existing.id, { name, slug: slug(name), order: index, archived: false });
+      await db.update("categories", existing.id, base);
     } else {
-      await db.insert("categories", { name, slug: slug(name), order: index, archived: false });
+      await db.insert("categories", base);
     }
+  }
+  existingCategories = await db.all("categories");
+  for (const definition of defaultCategoryDefinitions.filter((item) => item.parentName)) {
+    const child = existingCategories.find((category) => category.name === definition.name || category.slug === slug(definition.name));
+    const parent = existingCategories.find((category) => category.name === definition.parentName || category.slug === slug(definition.parentName));
+    if (child && parent) await db.update("categories", child.id, { parentId: parent.id, parentName: parent.name });
   }
   existingCategories = await db.all("categories");
   for (const category of existingCategories) {
@@ -1353,7 +1367,7 @@ async function routeApi(req, res, url) {
       if (terms.length) {
         const resourceCategory = categories.find((entry) => entry.id === item.categoryId);
         const classified = classifiedResource(item, categories);
-        const haystack = `${classified.title || ""} ${classified.author || ""} ${classified.format || ""} ${classified.originalFilename || ""} ${resourceCategory?.name || ""} ${classified.classification?.number || ""} ${classified.classification?.label || ""} ${classified.bibliography || ""}`.toLowerCase();
+        const haystack = `${classified.title || ""} ${classified.author || ""} ${classified.format || ""} ${classified.originalFilename || ""} ${displayCategoryName(resourceCategory)} ${classified.classification?.number || ""} ${classified.classification?.label || ""} ${classified.bibliography || ""}`.toLowerCase();
         if (!terms.every((term) => haystack.includes(term))) return false;
       }
       return true;

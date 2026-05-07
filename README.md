@@ -48,9 +48,9 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 - Social Analysis
 - Women Studies
 - Languages
-- English
-- Greek
-- Hebrew
+  - English
+  - Greek
+  - Hebrew
 - Research Methodology
 - Music
 - Homiletics

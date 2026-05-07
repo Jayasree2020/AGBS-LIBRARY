@@ -454,6 +454,11 @@ async function loadCategories() {
   state.categories = Array.isArray(categories.categories) ? categories.categories : [];
 }
 
+function categoryLabel(category) {
+  if (!category) return "Uncategorized";
+  return category.parentName ? `${category.parentName} / ${category.name}` : category.name;
+}
+
 async function loadResources({ q = "", categoryId = "", limit = 0, sort = "" } = {}) {
   const params = new URLSearchParams();
   if (q) params.set("q", q);
@@ -503,7 +508,7 @@ async function libraryPage() {
         <label>Category
           <select id="libraryCategoryInput" name="category">
             <option value="">All categories</option>
-            ${categories.map((category) => `<option value="${category.slug}" ${currentCategory?.id === category.id ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("")}
+            ${categories.map((category) => `<option value="${category.slug}" ${currentCategory?.id === category.id ? "selected" : ""}>${escapeHtml(categoryLabel(category))}</option>`).join("")}
           </select>
         </label>
         <button>Search</button>
@@ -511,7 +516,7 @@ async function libraryPage() {
       </form>
       <div class="toolbar">
         <button class="secondary" data-link href="/library">All</button>
-        ${categories.map((category) => `<button class="secondary" data-link href="/library/${category.slug}">${category.name}</button>`).join("")}
+        ${categories.map((category) => `<button class="secondary ${category.parentName ? "sub-category-button" : ""}" data-link href="/library/${category.slug}">${escapeHtml(categoryLabel(category))}</button>`).join("")}
       </div>
       <table class="table library-table">
         <thead><tr><th>Title</th><th>Author</th><th>Category</th><th>Format</th><th>Action</th>${staff ? "<th>Admin edit</th>" : ""}</tr></thead>
@@ -543,13 +548,13 @@ function libraryResourceRow(resource) {
     <tr>
       <td>${escapeHtml(resource.title)}</td>
       <td>${escapeHtml(resource.author || "Unknown author")}</td>
-      <td>${escapeHtml(category?.name || "Uncategorized")}</td>
+      <td>${escapeHtml(categoryLabel(category))}</td>
       <td><span class="badge published">${escapeHtml(resource.format)}</span></td>
       <td><button data-read="${resource.id}">Read</button></td>
       ${staff ? `
         <td class="library-admin-edit">
           <select data-library-category="${resource.id}" aria-label="Change category for ${escapeAttr(resource.title)}">
-            ${state.categories.map((item) => `<option value="${item.id}" ${item.id === resource.categoryId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+            ${state.categories.map((item) => `<option value="${item.id}" ${item.id === resource.categoryId ? "selected" : ""}>${escapeHtml(categoryLabel(item))}</option>`).join("")}
           </select>
           <button class="secondary" data-library-save="${resource.id}">Save category</button>
         </td>
@@ -720,7 +725,7 @@ async function adminPage() {
             </label>
             <label>Category for manual uploads
               <select name="targetCategoryId" id="targetCategoryId">
-                ${state.categories.map((category) => `<option value="${category.id}">${escapeHtml(category.name)}</option>`).join("")}
+                ${state.categories.map((category) => `<option value="${category.id}">${escapeHtml(categoryLabel(category))}</option>`).join("")}
               </select>
             </label>
             <div class="button-row">
@@ -821,7 +826,7 @@ function bookCountSummary() {
     const count = Number(counts.byCategory?.[category.id] || 0);
     return `
       <article class="stat-card">
-        <span>${escapeHtml(category.name)}</span>
+        <span>${escapeHtml(categoryLabel(category))}</span>
         <strong>${count}</strong>
       </article>
     `;
@@ -842,7 +847,7 @@ function adminResourceRow(resource) {
   return `
     <tr>
       <td><input data-title="${resource.id}" value="${escapeAttr(resource.title)}"></td>
-      <td><select data-category="${resource.id}">${state.categories.map((category) => `<option value="${category.id}" ${category.id === resource.categoryId ? "selected" : ""}>${escapeHtml(category.name)}</option>`).join("")}</select></td>
+      <td><select data-category="${resource.id}">${state.categories.map((category) => `<option value="${category.id}" ${category.id === resource.categoryId ? "selected" : ""}>${escapeHtml(categoryLabel(category))}</option>`).join("")}</select></td>
       <td><strong>${escapeHtml(classification.number || "")}</strong><br><span class="subtle">${escapeHtml(classification.label || "")}</span></td>
       <td><span class="badge published">${escapeHtml(resource.format)}</span></td>
       <td>

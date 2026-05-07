@@ -149,9 +149,9 @@ Default departments:
 - Social Analysis
 - Women Studies
 - Languages
-- English
-- Greek
-- Hebrew
+  - English
+  - Greek
+  - Hebrew
 - Research Methodology
 - Music
 - Homiletics
