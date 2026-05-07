@@ -1413,6 +1413,14 @@ async function routeApi(req, res, url) {
     return json(res, 200, { counts, recentResources });
   }
 
+  if (req.method === "GET" && url.pathname === "/api/resource-hashes") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const hashes = (await db.all("resources"))
+      .map((resource) => resource.metadata?.hash)
+      .filter(Boolean);
+    return json(res, 200, { hashes });
+  }
+
   if (req.method === "GET" && url.pathname === "/api/catalog-export") {
     if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
     const format = String(url.searchParams.get("format") || "html").toLowerCase();

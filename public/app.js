@@ -4,6 +4,7 @@ const state = {
   categories: [],
   resources: [],
   resourceCounts: { total: 0, byCategory: {} },
+  resourceHashes: new Set(),
   storageUsage: null,
   skippedUploads: [],
   reports: null,
@@ -175,6 +176,23 @@ function clearRememberedUploadState() {
   localStorage.removeItem(UPLOAD_STATE_KEY);
 }
 
+function hexFromBytes(buffer) {
+  return Array.from(new Uint8Array(buffer)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function fileSha256(file) {
+  return hexFromBytes(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
+}
+
+async function duplicateSkipForFile(file, seenHashes, knownHashes) {
+  const hash = await fileSha256(file);
+  if (knownHashes.has(hash) || seenHashes.has(hash)) {
+    return { skipped: { filename: uploadFilename(file), reason: "Exact duplicate ignored", hash } };
+  }
+  seenHashes.add(hash);
+  return { hash };
+}
+
 async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, label = "Uploading") {
   const uploadId = crypto.randomUUID();
   state.activeUpload = { ...(state.activeUpload || {}), uploadId };
@@ -265,7 +283,7 @@ function addPendingUploadFiles(files) {
   return added;
 }
 
-async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, onEntrySaved, signal) {
+async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, onEntrySaved, signal, seenHashes, knownHashes) {
   const totals = { resources: [], skipped: [], failed: [] };
   const zipName = uploadFilename(file);
   if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
@@ -295,6 +313,13 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
         type: blob.type || mimeForFilename(entry.name)
       });
       extracted.libraryPath = entry.name;
+      const duplicate = await duplicateSkipForFile(extracted, seenHashes, knownHashes);
+      if (duplicate.skipped) {
+        totals.skipped.push(duplicate.skipped);
+        await removeUploadQueueFile(extracted);
+        onEntrySaved?.({ resources: [], skipped: [duplicate.skipped], failed: [], progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.` }, fileIndex + 1, totalFiles);
+        continue;
+      }
       onProgress(`Uploading ${entry.name} from ZIP into the library...`);
       const data = await uploadChunkedFile(extracted, entryIndex, supportedEntries.length, options, onProgress, signal);
       const addedResources = Array.isArray(data.resources) ? data.resources : [];
@@ -315,17 +340,25 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
   return totals;
 }
 
-async function uploadChunked(files, options, onProgress, onFileSaved, signal, onTopFileDone) {
+async function uploadChunked(files, options, onProgress, onFileSaved, signal, onTopFileDone, knownHashes = new Set()) {
   const totals = { resources: [], skipped: [], failed: [] };
+  const seenHashes = new Set();
   for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
     if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
     const currentFile = files[fileIndex];
     try {
       if (isZipFile(currentFile)) {
-        const zipData = await uploadZipFile(currentFile, fileIndex, files.length, options, onProgress, onFileSaved, signal);
+        const zipData = await uploadZipFile(currentFile, fileIndex, files.length, options, onProgress, onFileSaved, signal, seenHashes, knownHashes);
         totals.resources.push(...(Array.isArray(zipData.resources) ? zipData.resources : []));
         totals.skipped.push(...(Array.isArray(zipData.skipped) ? zipData.skipped : []));
         totals.failed.push(...(Array.isArray(zipData.failed) ? zipData.failed : []));
+        await onTopFileDone?.(currentFile);
+        continue;
+      }
+      const duplicate = await duplicateSkipForFile(currentFile, seenHashes, knownHashes);
+      if (duplicate.skipped) {
+        totals.skipped.push(duplicate.skipped);
+        onFileSaved?.({ resources: [], skipped: [duplicate.skipped], failed: [] }, fileIndex + 1, files.length);
         await onTopFileDone?.(currentFile);
         continue;
       }
@@ -367,6 +400,12 @@ async function loadMe() {
 
 async function loadConfig() {
   state.config = await api("/api/config");
+}
+
+async function loadResourceHashes() {
+  const data = await api("/api/resource-hashes");
+  state.resourceHashes = new Set(Array.isArray(data.hashes) ? data.hashes.filter(Boolean) : []);
+  return state.resourceHashes;
 }
 
 function layout(content) {
@@ -1037,19 +1076,23 @@ function wireAdmin() {
       setTimeout(() => document.querySelector("#uploadForm")?.requestSubmit(), 400);
     }
   })();
-  resourceInput.addEventListener("change", async () => {
+  resourceInput.addEventListener("change", () => {
     const added = addPendingUploadFiles(resourceInput.files);
     resourceInput.value = "";
-    if (added.length) await saveUploadQueueFiles(added).catch(() => addUploadLog("The selected upload queue could not be remembered after refresh."));
     updateUploadSelection();
-    if (added.length) addUploadLog(`Added ${added.length} selected file(s) to the upload queue.`);
+    if (added.length) {
+      addUploadLog(`Added ${added.length} selected file(s) to the upload queue.`);
+      saveUploadQueueFiles(added).catch(() => addUploadLog("The selected upload queue could not be remembered after refresh."));
+    }
   });
-  folderInput.addEventListener("change", async () => {
+  folderInput.addEventListener("change", () => {
     const added = addPendingUploadFiles(folderInput.files);
     folderInput.value = "";
-    if (added.length) await saveUploadQueueFiles(added).catch(() => addUploadLog("The selected upload queue could not be remembered after refresh."));
     updateUploadSelection();
-    if (added.length) addUploadLog(`Added ${added.length} file(s) from folder selection to the upload queue.`);
+    if (added.length) {
+      addUploadLog(`Added ${added.length} file(s) from folder selection to the upload queue.`);
+      saveUploadQueueFiles(added).catch(() => addUploadLog("The selected upload queue could not be remembered after refresh."));
+    }
   });
   clearUploadButton.addEventListener("click", async () => {
     if (uploadController) return;
@@ -1106,7 +1149,9 @@ function wireAdmin() {
       clearUploadButton.disabled = true;
       stopUploadButton.disabled = false;
       uploadLog.innerHTML = "";
-      setUploadActivityStatus("Uploading...");
+      setUploadActivityStatus("Checking duplicates before upload...");
+      const knownHashes = await loadResourceHashes().catch(() => state.resourceHashes || new Set());
+      addUploadLog(`Duplicate check loaded. Uploading only new PDF/EPUB files.`);
       let data;
       const streamingUpload = totalSize > 4 * 1024 * 1024 || files.some(isZipFile);
       if (streamingUpload) {
@@ -1130,22 +1175,40 @@ function wireAdmin() {
           if (addedResources.length) {
             state.resourceCounts.total = Number(state.resourceCounts.total || 0) + addedResources.length;
             for (const resource of addedResources) {
+              if (resource.metadata?.hash) knownHashes.add(resource.metadata.hash);
               state.resourceCounts.byCategory[resource.categoryId || ""] = Number(state.resourceCounts.byCategory[resource.categoryId || ""] || 0) + 1;
             }
             refreshStorageUsage().catch(() => {});
           }
           refreshResourceReviewTable();
           wireResourceActions();
-        }, uploadController.signal, markUploadFileFinished);
+        }, uploadController.signal, markUploadFileFinished, knownHashes);
       } else {
+        const uploadFiles = [];
+        const clientSkipped = [];
+        const seenHashes = new Set();
+        for (const file of files) {
+          const duplicate = await duplicateSkipForFile(file, seenHashes, knownHashes);
+          if (duplicate.skipped) {
+            clientSkipped.push(duplicate.skipped);
+            await markUploadFileFinished(file);
+          } else {
+            uploadFiles.push(file);
+          }
+        }
+        if (!uploadFiles.length) {
+          data = { resources: [], skipped: clientSkipped, failed: [] };
+        } else {
         const form = new FormData();
         form.append("autoCategorize", String(options.autoCategorize));
         form.append("targetCategoryId", options.targetCategoryId);
-        for (const file of files) {
+        for (const file of uploadFiles) {
           form.append("files", file, uploadFilename(file));
         }
-        files.forEach((file) => addUploadLog(`Uploading ${uploadFilename(file)}`));
+        uploadFiles.forEach((file) => addUploadLog(`Uploading ${uploadFilename(file)}`));
         data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal, headers: uploadAuthHeaders() });
+        data.skipped = [...clientSkipped, ...(Array.isArray(data.skipped) ? data.skipped : [])];
+        }
         await clearUploadQueueFiles();
       }
       const skippedCount = data.skipped?.length || 0;
@@ -1155,6 +1218,7 @@ function wireAdmin() {
         state.uploadActivity.added += addedResources.length;
         state.uploadActivity.skipped += skippedCount;
         state.uploadActivity.failed += failedCount;
+        addedResources.forEach((resource) => resource.metadata?.hash && knownHashes.add(resource.metadata.hash));
       }
       const completionMessage = `Upload completed. Added: ${addedResources.length}. Skipped: ${skippedCount}. Failed: ${failedCount}.`;
       setUploadActivityStatus(completionMessage);
