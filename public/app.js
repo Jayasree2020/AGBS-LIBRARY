@@ -22,6 +22,11 @@ const state = {
 };
 
 const app = document.querySelector("#app");
+const UPLOAD_DB_NAME = "agbs-upload-queue";
+const UPLOAD_STORE_NAME = "files";
+const UPLOAD_STATE_KEY = "agbs-upload-state";
+const LARGE_UPLOAD_CHUNK_SIZE = 3 * 1024 * 1024;
+const DIRECT_FILE_UPLOAD_LIMIT = 3 * 1024 * 1024;
 
 class ApiError extends Error {
   constructor(message, status) {
@@ -77,10 +82,103 @@ async function loadJsZip() {
   return await jsZipLoader;
 }
 
+function openUploadDb() {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) return reject(new Error("This browser cannot remember uploads after refresh."));
+    const request = indexedDB.open(UPLOAD_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(UPLOAD_STORE_NAME)) db.createObjectStore(UPLOAD_STORE_NAME, { keyPath: "key" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Upload queue storage failed."));
+  });
+}
+
+async function withUploadStore(mode, callback) {
+  const db = await openUploadDb();
+  return await new Promise((resolve, reject) => {
+    const transaction = db.transaction(UPLOAD_STORE_NAME, mode);
+    const store = transaction.objectStore(UPLOAD_STORE_NAME);
+    const result = callback(store);
+    transaction.oncomplete = () => {
+      db.close();
+      resolve(result);
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error || new Error("Upload queue storage failed."));
+    };
+  });
+}
+
+async function saveUploadQueueFiles(files) {
+  const items = Array.from(files || []);
+  if (!items.length) return;
+  await withUploadStore("readwrite", (store) => {
+    for (const file of items) {
+      store.put({
+        key: uploadFileKey(file),
+        filename: uploadFilename(file),
+        libraryPath: uploadFilename(file),
+        type: file.type,
+        size: file.size,
+        lastModified: file.lastModified || Date.now(),
+        file
+      });
+    }
+  });
+}
+
+async function loadUploadQueueFiles() {
+  try {
+    const records = await withUploadStore("readonly", (store) => new Promise((resolve, reject) => {
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error || new Error("Upload queue could not be loaded."));
+    }));
+    return records.map((record) => {
+      const file = record.file;
+      if (file && record.libraryPath) file.libraryPath = record.libraryPath;
+      return file;
+    }).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function removeUploadQueueFile(file) {
+  try {
+    await withUploadStore("readwrite", (store) => store.delete(uploadFileKey(file)));
+  } catch {}
+}
+
+async function clearUploadQueueFiles() {
+  try {
+    await withUploadStore("readwrite", (store) => store.clear());
+  } catch {}
+}
+
+function rememberUploadState(options, running = true) {
+  localStorage.setItem(UPLOAD_STATE_KEY, JSON.stringify({ running, options, savedAt: Date.now() }));
+}
+
+function readRememberedUploadState() {
+  try {
+    return JSON.parse(localStorage.getItem(UPLOAD_STATE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function clearRememberedUploadState() {
+  localStorage.removeItem(UPLOAD_STATE_KEY);
+}
+
 async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, label = "Uploading") {
   const uploadId = crypto.randomUUID();
   state.activeUpload = { ...(state.activeUpload || {}), uploadId };
-  const chunkSize = 1024 * 1024;
+  const chunkSize = LARGE_UPLOAD_CHUNK_SIZE;
   const filename = uploadFilename(file);
   const metadata = {
     fileIndex: 0,
@@ -105,7 +203,19 @@ async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, l
   return { uploadId, metadata };
 }
 
+async function uploadDirectFile(file, options, onProgress, signal) {
+  const form = new FormData();
+  form.append("autoCategorize", String(options.autoCategorize));
+  form.append("targetCategoryId", options.targetCategoryId);
+  form.append("files", file, uploadFilename(file));
+  onProgress(`Uploading ${uploadFilename(file)} in fast mode...`);
+  return await api("/api/resources/upload", { method: "POST", body: form, signal, headers: uploadAuthHeaders() });
+}
+
 async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgress, signal) {
+  if (!isZipFile(file) && file.size <= DIRECT_FILE_UPLOAD_LIMIT) {
+    return await uploadDirectFile(file, options, onProgress, signal);
+  }
   let uploadId = "";
   try {
     const sent = await sendFileChunks(file, fileIndex, totalFiles, onProgress, signal);
@@ -142,7 +252,7 @@ function uploadFileKey(file) {
 
 function addPendingUploadFiles(files) {
   const incoming = Array.from(files || []);
-  if (!incoming.length) return 0;
+  if (!incoming.length) return [];
   const existing = new Set(state.pendingUploadFiles.map(uploadFileKey));
   const added = [];
   for (const file of incoming) {
@@ -152,7 +262,7 @@ function addPendingUploadFiles(files) {
     added.push(file);
   }
   state.pendingUploadFiles.push(...added);
-  return added.length;
+  return added;
 }
 
 async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, onEntrySaved, signal) {
@@ -205,19 +315,21 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
   return totals;
 }
 
-async function uploadChunked(files, options, onProgress, onFileSaved, signal) {
+async function uploadChunked(files, options, onProgress, onFileSaved, signal, onTopFileDone) {
   const totals = { resources: [], skipped: [], failed: [] };
   for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
     if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
+    const currentFile = files[fileIndex];
     try {
-      if (isZipFile(files[fileIndex])) {
-        const zipData = await uploadZipFile(files[fileIndex], fileIndex, files.length, options, onProgress, onFileSaved, signal);
+      if (isZipFile(currentFile)) {
+        const zipData = await uploadZipFile(currentFile, fileIndex, files.length, options, onProgress, onFileSaved, signal);
         totals.resources.push(...(Array.isArray(zipData.resources) ? zipData.resources : []));
         totals.skipped.push(...(Array.isArray(zipData.skipped) ? zipData.skipped : []));
         totals.failed.push(...(Array.isArray(zipData.failed) ? zipData.failed : []));
+        await onTopFileDone?.(currentFile);
         continue;
       }
-      const data = await uploadChunkedFile(files[fileIndex], fileIndex, files.length, options, onProgress, signal);
+      const data = await uploadChunkedFile(currentFile, fileIndex, files.length, options, onProgress, signal);
       const addedResources = Array.isArray(data.resources) ? data.resources : [];
       const skipped = Array.isArray(data.skipped) ? data.skipped : [];
       const failed = Array.isArray(data.failed) ? data.failed : [];
@@ -225,10 +337,11 @@ async function uploadChunked(files, options, onProgress, onFileSaved, signal) {
       totals.skipped.push(...skipped);
       totals.failed.push(...failed);
       onFileSaved?.(data, fileIndex + 1, files.length);
+      await onTopFileDone?.(currentFile);
     } catch (error) {
       if (error.name === "AbortError") throw error;
       if (isAuthError(error)) throw error;
-      const filename = uploadFilename(files[fileIndex]);
+      const filename = uploadFilename(currentFile);
       totals.failed.push({ filename, reason: error.message });
       onFileSaved?.({ resources: [], skipped: [], failed: [{ filename, reason: error.message }] }, fileIndex + 1, files.length);
     }
@@ -901,28 +1014,48 @@ function wireAdmin() {
     const mb = (totalSize / 1024 / 1024).toFixed(2);
     uploadSelection.textContent = files.length ? `${files.length} file(s) selected, ${mb} MB total.` : "No files selected.";
     const message = hasZip
-      ? "ZIP mode: the app will open the ZIP folder and upload each PDF/EPUB inside as a separate library book. JPG/image files will be skipped."
+      ? "ZIP mode: the app will open the ZIP folder and upload each PDF/EPUB inside as a separate library book. JPG/image files will be ignored."
       : totalSize > 4 * 1024 * 1024
         ? "Safe upload mode will send each file carefully, then place the finished files into the library."
         : "";
     uploadStatus.textContent = message;
     clearUploadButton.disabled = !files.length || Boolean(uploadController);
   };
-  resourceInput.addEventListener("change", () => {
+  (async () => {
+    const rememberedFiles = await loadUploadQueueFiles();
+    const added = addPendingUploadFiles(rememberedFiles);
+    if (!added.length) return;
+    const rememberedState = readRememberedUploadState();
+    if (rememberedState.options) {
+      document.querySelector("#autoCategorize").value = String(rememberedState.options.autoCategorize !== false);
+      if (rememberedState.options.targetCategoryId) document.querySelector("#targetCategoryId").value = rememberedState.options.targetCategoryId;
+    }
+    updateUploadSelection();
+    addUploadLog(`Restored ${added.length} file(s) from the saved upload queue.`);
+    if (rememberedState.running) {
+      setUploadActivityStatus("Continuing the upload queue after refresh...");
+      setTimeout(() => document.querySelector("#uploadForm")?.requestSubmit(), 400);
+    }
+  })();
+  resourceInput.addEventListener("change", async () => {
     const added = addPendingUploadFiles(resourceInput.files);
     resourceInput.value = "";
+    if (added.length) await saveUploadQueueFiles(added).catch(() => addUploadLog("The selected upload queue could not be remembered after refresh."));
     updateUploadSelection();
-    if (added) addUploadLog(`Added ${added} selected file(s) to the upload queue.`);
+    if (added.length) addUploadLog(`Added ${added.length} selected file(s) to the upload queue.`);
   });
-  folderInput.addEventListener("change", () => {
+  folderInput.addEventListener("change", async () => {
     const added = addPendingUploadFiles(folderInput.files);
     folderInput.value = "";
+    if (added.length) await saveUploadQueueFiles(added).catch(() => addUploadLog("The selected upload queue could not be remembered after refresh."));
     updateUploadSelection();
-    if (added) addUploadLog(`Added ${added} file(s) from folder selection to the upload queue.`);
+    if (added.length) addUploadLog(`Added ${added.length} file(s) from folder selection to the upload queue.`);
   });
-  clearUploadButton.addEventListener("click", () => {
+  clearUploadButton.addEventListener("click", async () => {
     if (uploadController) return;
     state.pendingUploadFiles = [];
+    await clearUploadQueueFiles();
+    clearRememberedUploadState();
     resourceInput.value = "";
     folderInput.value = "";
     uploadLog.innerHTML = "";
@@ -934,6 +1067,7 @@ function wireAdmin() {
     if (!uploadController) return;
     stopUploadButton.disabled = true;
     uploadController.abort();
+    clearRememberedUploadState();
     setUploadActivityStatus("Stopping upload...");
     addUploadLog("Upload stop requested.");
     if (state.activeUpload?.uploadId) {
@@ -956,7 +1090,14 @@ function wireAdmin() {
       autoCategorize: document.querySelector("#autoCategorize").value === "true",
       targetCategoryId: document.querySelector("#targetCategoryId").value
     };
+    const markUploadFileFinished = async (file) => {
+      const key = uploadFileKey(file);
+      state.pendingUploadFiles = state.pendingUploadFiles.filter((item) => uploadFileKey(item) !== key);
+      await removeUploadQueueFile(file);
+      updateUploadSelection();
+    };
     try {
+      rememberUploadState(options, true);
       uploadController = new AbortController();
       const uploadSession = await api("/api/resources/upload-token", { method: "POST" });
       state.activeUpload = { controller: uploadController, token: uploadSession.uploadToken };
@@ -995,7 +1136,7 @@ function wireAdmin() {
           }
           refreshResourceReviewTable();
           wireResourceActions();
-        }, uploadController.signal);
+        }, uploadController.signal, markUploadFileFinished);
       } else {
         const form = new FormData();
         form.append("autoCategorize", String(options.autoCategorize));
@@ -1005,6 +1146,7 @@ function wireAdmin() {
         }
         files.forEach((file) => addUploadLog(`Uploading ${uploadFilename(file)}`));
         data = await api("/api/resources/upload", { method: "POST", body: form, signal: uploadController.signal, headers: uploadAuthHeaders() });
+        await clearUploadQueueFiles();
       }
       const skippedCount = data.skipped?.length || 0;
       const failedCount = data.failed?.length || 0;
@@ -1031,6 +1173,8 @@ function wireAdmin() {
         addUploadLog("Upload finished. Refresh the admin page if the newest list is not visible yet.");
       }
       state.pendingUploadFiles = [];
+      await clearUploadQueueFiles();
+      clearRememberedUploadState();
       updateUploadSelection();
     } catch (error) {
       const stopped = error.name === "AbortError";
