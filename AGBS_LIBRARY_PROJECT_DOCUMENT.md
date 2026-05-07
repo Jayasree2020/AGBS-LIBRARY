@@ -2,7 +2,7 @@
 
 ## 1. Project Summary
 
-AGBS LIBRARY is a secure digital seminary library for off-campus students. It allows students to sign in, search library resources, read approved PDF/EPUB/image files inside the app, and have their reading activity tracked for admin/director review.
+AGBS LIBRARY is a secure digital seminary library for off-campus students. It allows students to sign in, search library resources, read approved PDF/EPUB files inside the app, and have their reading activity tracked for admin/director review.
 
 Admins manage:
 
@@ -172,10 +172,7 @@ Supported formats:
 
 - PDF
 - EPUB
-- PNG
-- JPG/JPEG
-- WEBP
-- GIF
+ZIP files may be selected, but only PDF and EPUB files inside the ZIP are imported.
 
 Upload modes:
 
@@ -207,9 +204,9 @@ Large uploads should work like this:
 ZIP behavior:
 
 1. The ZIP is opened in the browser.
-2. Each supported PDF/EPUB/image inside the ZIP is extracted by the browser.
+2. Each supported PDF/EPUB inside the ZIP is extracted by the browser.
 3. Each extracted file is uploaded as its own complete library item.
-4. Unsupported files inside the ZIP are skipped.
+4. JPG/PNG/WEBP/GIF and other unsupported files inside the ZIP are skipped.
 
 Why this matters:
 
@@ -341,7 +338,7 @@ S3 layout:
 ```text
 agbs-library/
   books/
-    one complete object per PDF/EPUB/image
+    one complete object per PDF/EPUB
   data/
     users.json
     categories.json

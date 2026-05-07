@@ -1,6 +1,6 @@
 # AGBS LIBRARY
 
-AGBS LIBRARY is a secure digital library portal for off-campus seminary students. It supports controlled student access to PDF, EPUB, and image-based study resources, admin-managed uploads, department-based categorization, AWS S3 storage, and reading activity tracking.
+AGBS LIBRARY is a secure digital library portal for off-campus seminary students. It supports controlled student access to PDF and EPUB study resources, admin-managed uploads, department-based categorization, AWS S3 storage, and reading activity tracking.
 
 Live site: [https://www.agbslibrary.com](https://www.agbslibrary.com)
 
@@ -23,7 +23,7 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 - Admin/director-only dashboard.
 - Library browsing by department.
 - Search by title, author, filename, department, format, Dewey number, Dewey class, or bibliography text.
-- Protected PDF/EPUB/image viewing inside the app.
+- Protected PDF/EPUB viewing inside the app.
 - Admin category correction directly from library search results.
 - Admin upload of files, folders, and ZIP archives.
 - Browser-side ZIP opening so each supported file inside the ZIP becomes its own library item.
@@ -62,7 +62,7 @@ Admins can add more categories from the dashboard.
 
 Admins can upload:
 
-- A single PDF, EPUB, or image.
+- A single PDF or EPUB.
 - Multiple files.
 - A folder of files.
 - A ZIP archive.
@@ -71,10 +71,7 @@ Supported file types:
 
 - PDF
 - EPUB
-- PNG
-- JPG/JPEG
-- WEBP
-- GIF
+ZIP files may be selected, but only PDF and EPUB files inside the ZIP are imported.
 
 Upload behavior:
 
@@ -90,7 +87,7 @@ Upload behavior:
 Large upload behavior:
 
 - Large files are sent in smaller internal upload steps so Vercel can receive them.
-- ZIP files are opened in the browser, and each supported PDF/EPUB/image inside the ZIP is uploaded separately.
+- ZIP files are opened in the browser, and each supported PDF/EPUB inside the ZIP is uploaded separately. JPG/PNG/WEBP/GIF files are skipped.
 - In AWS mode, the final file is written directly to AWS S3 instead of being kept on Vercel temporary disk.
 - Admin uploads receive a temporary upload token so long batches can continue even if the normal browser login cookie is not read during one of the later file requests.
 - This prevents the Vercel `ENOSPC: no space left on device` failure that happens when too many large files are copied into `/tmp`.
@@ -190,7 +187,7 @@ AWS S3
 
 AWS S3 storage layout:
 
-- `books/`: complete PDF/EPUB/image objects.
+- `books/`: complete PDF/EPUB objects.
 - `data/`: JSON records for users, resources, categories, sessions, logs, and skipped uploads.
 - `tmp/uploads/`: temporary upload chunks used only while a file is being completed.
 

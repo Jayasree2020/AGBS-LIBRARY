@@ -75,7 +75,7 @@ const mimeTypes = {
   ".svg": "image/svg+xml"
 };
 
-const allowedResourceExtensions = [".pdf", ".epub", ".png", ".jpg", ".jpeg", ".webp", ".gif"];
+const allowedResourceExtensions = [".pdf", ".epub"];
 const CHUNK_DIR = path.join(STORAGE_DIR, "chunks");
 const INLINE_FILE_LIMIT = 8 * 1024 * 1024;
 
@@ -698,7 +698,7 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
     const hash = fileHash(file.content);
     const duplicateKey = uploadDuplicateKey(file.filename, file.content.length);
     if (!allowedResourceExtensions.includes(extension)) {
-      skippedRecords.push(buildSkippedUpload({ file, reason: "Unsupported file type", user, batch, hash }));
+      skippedRecords.push(buildSkippedUpload({ file, reason: "Only PDF and EPUB files are allowed", user, batch, hash }));
       continue;
     }
     if (seenHashes.has(hash) || seenKeys.has(duplicateKey)) {
@@ -1091,7 +1091,7 @@ async function recordSkippedUpload({ file, reason, user, batch, hash }) {
 
 async function replaceResourceFile(resource, file, user) {
   const extension = path.extname(file.filename).toLowerCase();
-  if (!allowedResourceExtensions.includes(extension)) throw new Error("Choose a supported PDF, EPUB, or image file.");
+  if (!allowedResourceExtensions.includes(extension)) throw new Error("Choose a supported PDF or EPUB file.");
   const existingResources = await db.all("resources");
   const hash = fileHash(file.content);
   const duplicateKey = uploadDuplicateKey(file.filename, file.content.length);
@@ -1232,6 +1232,18 @@ async function seed() {
     for (const resource of resources) {
       if (resource.inlineContent) await db.update("resources", resource.id, { inlineContent: undefined });
     }
+  }
+  await removeUnsupportedResourceFiles();
+}
+
+async function removeUnsupportedResourceFiles() {
+  const resources = await db.all("resources");
+  for (const resource of resources) {
+    const extension = path.extname(resource.originalFilename || resource.storageName || "").toLowerCase();
+    const format = String(resource.format || "").toLowerCase();
+    if (allowedResourceExtensions.includes(extension) || ["pdf", "epub"].includes(format)) continue;
+    await removeStoredFile(resource.storageName);
+    await db.delete("resources", resource.id);
   }
 }
 
@@ -1429,7 +1441,7 @@ async function routeApi(req, res, url) {
     const selectedCategory = categories.find((item) => item.id === targetCategoryId) || categories[0];
     const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: files.length, status: "processed" });
     const { saved, skipped } = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
-    if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
+    if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF or EPUB files were found in that upload." });
     return json(res, 201, { resources: saved.map(publicResource), skipped });
   }
 
@@ -1484,7 +1496,7 @@ async function routeApi(req, res, url) {
     const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: files.length, status: "processed", uploadMode: "chunked" });
     const { saved, skipped } = await saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch });
     await removeUploadChunks(uploadId);
-    if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF, EPUB, or image files were found in that upload." });
+    if (!saved.length && !skipped.length) return json(res, 400, { error: "No supported PDF or EPUB files were found in that upload." });
     return json(res, 201, { resources: saved.map(publicResource), skipped });
   }
 

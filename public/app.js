@@ -13,6 +13,7 @@ const state = {
     running: false,
     status: "",
     logs: [],
+    skippedDetails: [],
     added: 0,
     skipped: 0,
     failed: 0
@@ -56,17 +57,13 @@ function uploadFilename(file) {
 }
 
 function isSupportedLibraryFile(name) {
-  return /\.(pdf|epub|png|jpe?g|webp|gif)$/i.test(String(name || ""));
+  return /\.(pdf|epub)$/i.test(String(name || ""));
 }
 
 function mimeForFilename(name) {
   const lower = String(name || "").toLowerCase();
   if (lower.endsWith(".pdf")) return "application/pdf";
   if (lower.endsWith(".epub")) return "application/epub+zip";
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".gif")) return "image/gif";
   return "application/octet-stream";
 }
 
@@ -148,13 +145,14 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
   const entries = Object.values(zip.files).filter((entry) => !entry.dir);
   const supportedEntries = entries.filter((entry) => isSupportedLibraryFile(entry.name));
   const unsupportedEntries = entries.filter((entry) => !isSupportedLibraryFile(entry.name));
+  onProgress(`ZIP ${zipName}: found ${supportedEntries.length} uploadable PDF/EPUB file(s) inside ${entries.length} file(s).`);
   for (const entry of unsupportedEntries) {
-    const skipped = { filename: entry.name, reason: "Unsupported file type inside ZIP" };
+    const skipped = { filename: entry.name, reason: "Only PDF and EPUB files are allowed" };
     totals.skipped.push(skipped);
     onEntrySaved?.({ resources: [], skipped: [skipped], failed: [], progressLabel: `ZIP ${zipName}: skipped unsupported file ${entry.name}.` }, fileIndex + 1, totalFiles);
   }
   if (!supportedEntries.length) {
-    const failed = { filename: zipName, reason: "No supported PDF, EPUB, or image files were found inside this ZIP." };
+    const failed = { filename: zipName, reason: "No supported PDF or EPUB files were found inside this ZIP." };
     totals.failed.push(failed);
     onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${zipName}: no supported files found.` }, fileIndex + 1, totalFiles);
     return totals;
@@ -162,13 +160,14 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
   for (let entryIndex = 0; entryIndex < supportedEntries.length; entryIndex++) {
     if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
     const entry = supportedEntries[entryIndex];
-    onProgress(`Extracting ZIP file ${entryIndex + 1} of ${supportedEntries.length}: ${entry.name}`);
+    onProgress(`Opening ZIP folder file ${entryIndex + 1} of ${supportedEntries.length}: ${entry.name}`);
     try {
       const blob = await entry.async("blob");
       const extracted = new File([blob], entry.name.split("/").pop() || entry.name, {
         type: blob.type || mimeForFilename(entry.name)
       });
       extracted.libraryPath = entry.name;
+      onProgress(`Uploading ${entry.name} from ZIP into the library...`);
       const data = await uploadChunkedFile(extracted, entryIndex, supportedEntries.length, options, onProgress, signal);
       const addedResources = Array.isArray(data.resources) ? data.resources : [];
       const skipped = Array.isArray(data.skipped) ? data.skipped : [];
@@ -286,15 +285,64 @@ function addUploadActivityLog(message) {
   refreshUploadDock();
 }
 
+function recordSkippedUploadDetails(items) {
+  const skipped = Array.isArray(items) ? items : [];
+  if (!skipped.length) return;
+  state.uploadActivity.skippedDetails.push(...skipped.map((item) => ({
+    filename: item.filename || "Unknown file",
+    reason: item.reason || "Skipped"
+  })));
+  state.uploadActivity.skippedDetails = state.uploadActivity.skippedDetails.slice(-25);
+  refreshSkippedDetails();
+  refreshUploadDock();
+}
+
+function skippedReasonSummary() {
+  const counts = {};
+  for (const item of state.uploadActivity.skippedDetails || []) {
+    const reason = item.reason || "Skipped";
+    counts[reason] = (counts[reason] || 0) + 1;
+  }
+  return Object.entries(counts).map(([reason, count]) => `${count} ${reason}`).join("; ");
+}
+
+function skippedDetailsHtml(limit = 8) {
+  const details = state.uploadActivity.skippedDetails || [];
+  if (!details.length) return "";
+  const recent = details.slice(-limit).reverse();
+  return `
+    <div class="upload-skipped-details" id="uploadSkippedDetails">
+      <strong>Skipped file reasons</strong>
+      <p>${escapeHtml(skippedReasonSummary())}</p>
+      <ul>
+        ${recent.map((item) => `<li><span>${escapeHtml(item.filename)}</span><em>${escapeHtml(item.reason)}</em></li>`).join("")}
+      </ul>
+    </div>
+  `;
+}
+
+function refreshSkippedDetails() {
+  const existing = document.querySelector("#uploadSkippedDetails");
+  const html = skippedDetailsHtml();
+  if (existing) {
+    if (html) existing.outerHTML = html;
+    else existing.remove();
+    return;
+  }
+  if (html) document.querySelector("#uploadLog")?.insertAdjacentHTML("beforebegin", html);
+}
+
 function uploadDock() {
   if (!state.uploadActivity.running && !state.uploadActivity.status) return "";
   const activity = state.uploadActivity;
+  const skipSummary = activity.skippedDetails?.length ? `<small>${escapeHtml(skippedReasonSummary())}</small>` : "";
   return `
     <aside class="upload-dock" id="uploadDock">
       <div>
         <strong>${activity.running ? "Upload running" : "Upload finished"}</strong>
         <p>${escapeHtml(activity.status || "Preparing upload...")}</p>
         <small>${activity.added} added, ${activity.skipped} skipped, ${activity.failed} failed</small>
+        ${skipSummary}
       </div>
       ${activity.running ? `<button type="button" class="danger" data-stop-global-upload>Stop</button>` : `<button type="button" class="secondary" data-hide-upload-dock>Hide</button>`}
     </aside>
@@ -321,7 +369,7 @@ function wireUploadDock() {
     if (upload?.uploadId) await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId: upload.uploadId }, headers: uploadAuthHeaders() }).catch(() => {});
   });
   document.querySelector("[data-hide-upload-dock]")?.addEventListener("click", () => {
-    state.uploadActivity = { running: false, status: "", logs: [], added: 0, skipped: 0, failed: 0 };
+    state.uploadActivity = { running: false, status: "", logs: [], skippedDetails: [], added: 0, skipped: 0, failed: 0 };
     refreshUploadDock();
   });
 }
@@ -661,8 +709,9 @@ async function adminPage() {
         <div class="panel">
           <h2>Upload books</h2>
           <form class="form" id="uploadForm">
-            <label>Choose files <input type="file" id="resourceFiles" name="files" accept=".pdf,.epub,.zip,.png,.jpg,.jpeg,.webp,.gif" multiple></label>
+            <label>Choose files <input type="file" id="resourceFiles" name="files" accept=".pdf,.epub,.zip" multiple></label>
             <label>Choose folder <input type="file" id="resourceFolder" name="folder" webkitdirectory directory multiple></label>
+            <p class="subtle upload-help">Only PDF and EPUB books are allowed. ZIP folders are supported: choose a .zip file and the app will open it, find PDFs/EPUBs inside its folders, and upload each one as a separate library book.</p>
             <label>Upload handling
               <select name="autoCategorize" id="autoCategorize">
                 <option value="true">Auto-categorize by file and folder names</option>
@@ -800,7 +849,7 @@ function adminResourceRow(resource) {
         <button class="secondary" data-save="${resource.id}">Save</button>
         <button class="secondary" data-preview="${resource.id}">View</button>
         <button class="secondary" data-replace="${resource.id}">Replace</button>
-        <input class="hidden-file" data-replace-input="${resource.id}" type="file" accept=".pdf,.epub,.png,.jpg,.jpeg,.webp,.gif">
+        <input class="hidden-file" data-replace-input="${resource.id}" type="file" accept=".pdf,.epub">
         <button class="danger" data-remove="${resource.id}">Remove</button>
       </td>
     </tr>
@@ -863,7 +912,11 @@ function wireAdmin() {
     const hasZip = files.some(isZipFile);
     const mb = (totalSize / 1024 / 1024).toFixed(2);
     uploadSelection.textContent = files.length ? `${files.length} file(s) selected, ${mb} MB total.` : "No files selected.";
-    const message = totalSize > 4 * 1024 * 1024 || hasZip ? "Safe upload mode will send each PDF/file or ZIP entry carefully, then place the finished files into folders." : "";
+    const message = hasZip
+      ? "ZIP mode: the app will open the ZIP folder and upload each PDF/EPUB inside as a separate library book. JPG/image files will be skipped."
+      : totalSize > 4 * 1024 * 1024
+        ? "Safe upload mode will send each file carefully, then place the finished files into the library."
+        : "";
     uploadStatus.textContent = message;
     clearUploadButton.disabled = !files.length || Boolean(uploadController);
   };
@@ -908,7 +961,7 @@ function wireAdmin() {
       uploadController = new AbortController();
       const uploadSession = await api("/api/resources/upload-token", { method: "POST" });
       state.activeUpload = { controller: uploadController, token: uploadSession.uploadToken };
-      state.uploadActivity = { running: true, status: "Uploading...", logs: [], added: 0, skipped: 0, failed: 0 };
+      state.uploadActivity = { running: true, status: "Uploading...", logs: [], skippedDetails: [], added: 0, skipped: 0, failed: 0 };
       uploadButton.disabled = true;
       clearUploadButton.disabled = true;
       stopUploadButton.disabled = false;
@@ -926,6 +979,7 @@ function wireAdmin() {
           const failed = Array.isArray(partial.failed) ? partial.failed : [];
           addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
           skipped.forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
+          recordSkippedUploadDetails(skipped);
           failed.forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
           const progressLabel = partial.progressLabel || `${completed} of ${total} file(s) checked.`;
           state.uploadActivity.added += addedResources.length;
@@ -965,6 +1019,7 @@ function wireAdmin() {
       if (!streamingUpload) {
         addedResources.forEach((resource) => addUploadLog(`Added to library: ${resource.title}`));
         (data.skipped || []).forEach((item) => addUploadLog(`Skipped: ${item.filename} (${item.reason})`));
+        recordSkippedUploadDetails(data.skipped || []);
         (data.failed || []).forEach((item) => addUploadLog(`Failed: ${item.filename} (${item.reason})`));
       }
       try {
