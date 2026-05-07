@@ -80,6 +80,18 @@ const allowedResourceExtensions = [".pdf", ".epub"];
 const CHUNK_DIR = path.join(STORAGE_DIR, "chunks");
 const INLINE_FILE_LIMIT = 8 * 1024 * 1024;
 
+function resourceExtensionFor(file) {
+  const filename = String(file?.filename || "").trim();
+  const namedMatch = filename.match(/\.(pdf|epub)\s*\.?$/i);
+  if (namedMatch) return `.${namedMatch[1].toLowerCase()}`;
+  const contentType = String(file?.contentType || "").toLowerCase();
+  if (contentType.includes("pdf")) return ".pdf";
+  if (contentType.includes("epub")) return ".epub";
+  const content = Buffer.isBuffer(file?.content) ? file.content : Buffer.from(file?.content || "");
+  if (content.subarray(0, 5).toString("utf8") === "%PDF-") return ".pdf";
+  return path.extname(filename).toLowerCase();
+}
+
 class JsonStore {
   constructor(dir) {
     this.dir = dir;
@@ -692,18 +704,14 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
   const resourceRecords = [];
   const skippedRecords = [];
   const existingResources = await db.all("resources");
-  const seenHashes = new Set(existingResources.map((resource) => resource.metadata?.hash).filter(Boolean));
   for (const file of files) {
-    const extension = path.extname(file.filename).toLowerCase();
+    const extension = resourceExtensionFor(file);
     const hash = fileHash(file.content);
     if (!allowedResourceExtensions.includes(extension)) {
       skippedRecords.push(buildSkippedUpload({ file, reason: "Only PDF and EPUB files are allowed", user, batch, hash }));
       continue;
     }
-    if (seenHashes.has(hash)) {
-      skippedRecords.push(buildSkippedUpload({ file, reason: "Exact duplicate PDF/EPUB already exists in the library", user, batch, hash }));
-      continue;
-    }
+    const duplicateOf = existingResources.find((resource) => resource.metadata?.hash === hash)?.id || "";
     const category = autoCategorize ? (categoryForFile(file.filename, categories) || selectedCategory) : selectedCategory;
     const suggested = category?.name || selectedCategory?.name || "";
     const storageName = `${crypto.randomUUID()}${extension}`;
@@ -731,9 +739,8 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       uploadBatchId: batch.id,
       createdBy: user.id,
       inlineContent: shouldInlineFiles() && file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
-      metadata: { size: file.content.length, contentType: file.contentType, hash, duplicateCheck: "exact-hash" }
+      metadata: { size: file.content.length, contentType: file.contentType, hash, duplicateCheck: "marked-only", duplicateOf }
     });
-    seenHashes.add(hash);
   }
   const saved = typeof db.insertMany === "function" ? await db.insertMany("resources", resourceRecords) : [];
   const skipped = typeof db.insertMany === "function" ? await db.insertMany("skippedUploads", skippedRecords) : [];
@@ -1093,12 +1100,11 @@ async function recordSkippedUpload({ file, reason, user, batch, hash }) {
 }
 
 async function replaceResourceFile(resource, file, user) {
-  const extension = path.extname(file.filename).toLowerCase();
+  const extension = resourceExtensionFor(file);
   if (!allowedResourceExtensions.includes(extension)) throw new Error("Choose a supported PDF or EPUB file.");
   const existingResources = await db.all("resources");
   const hash = fileHash(file.content);
   const duplicate = existingResources.find((item) => item.id !== resource.id && item.metadata?.hash === hash);
-  if (duplicate) throw new Error("This file already exists in the library, so it was not added again.");
   const storageName = `${crypto.randomUUID()}${extension}`;
   if (typeof db.saveFile === "function") {
     await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
@@ -1123,7 +1129,7 @@ async function replaceResourceFile(resource, file, user) {
     bibliography: buildBibliography({ title, author, format: extension.slice(1), originalFilename: file.filename, category, classification }),
     updatedBy: user.id,
     inlineContent: shouldInlineFiles() && file.content.length <= INLINE_FILE_LIMIT ? file.content.toString("base64") : undefined,
-    metadata: { size: file.content.length, contentType: file.contentType, hash }
+    metadata: { size: file.content.length, contentType: file.contentType, hash, duplicateCheck: "marked-only", duplicateOf: duplicate?.id || "" }
   });
 }
 
@@ -1249,7 +1255,7 @@ async function seed() {
 async function removeUnsupportedResourceFiles() {
   const resources = await db.all("resources");
   for (const resource of resources) {
-    const extension = path.extname(resource.originalFilename || resource.storageName || "").toLowerCase();
+    const extension = resourceExtensionFor({ filename: resource.originalFilename || resource.storageName || "", contentType: resource.metadata?.contentType || "" });
     const format = String(resource.format || "").toLowerCase();
     if (allowedResourceExtensions.includes(extension) || ["pdf", "epub"].includes(format)) continue;
     await removeStoredFile(resource.storageName);

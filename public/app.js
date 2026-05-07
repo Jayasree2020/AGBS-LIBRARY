@@ -58,7 +58,7 @@ function uploadFilename(file) {
 }
 
 function isSupportedLibraryFile(name) {
-  return /\.(pdf|epub)$/i.test(String(name || ""));
+  return /\.(pdf|epub)\s*\.?$/i.test(String(name || "").trim());
 }
 
 function mimeForFilename(name) {
@@ -166,10 +166,8 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
   const supportedEntries = entries.filter((entry) => isSupportedLibraryFile(entry.name));
   const unsupportedEntries = entries.filter((entry) => !isSupportedLibraryFile(entry.name));
   onProgress(`ZIP ${zipName}: found ${supportedEntries.length} uploadable PDF/EPUB file(s) inside ${entries.length} file(s).`);
-  for (const entry of unsupportedEntries) {
-    const skipped = { filename: entry.name, reason: "Only PDF and EPUB files are allowed" };
-    totals.skipped.push(skipped);
-    onEntrySaved?.({ resources: [], skipped: [skipped], failed: [], progressLabel: `ZIP ${zipName}: skipped unsupported file ${entry.name}.` }, fileIndex + 1, totalFiles);
+  if (unsupportedEntries.length) {
+    onProgress(`ZIP ${zipName}: ignoring ${unsupportedEntries.length} non-book file(s). Only PDFs and EPUBs will be imported.`);
   }
   if (!supportedEntries.length) {
     const failed = { filename: zipName, reason: "No supported PDF or EPUB files were found inside this ZIP." };
