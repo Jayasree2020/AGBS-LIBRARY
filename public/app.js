@@ -272,11 +272,9 @@ function layout(content) {
         </nav>
       </header>
       ${content}
-      ${uploadDock()}
     </div>
   `;
   wireLinks();
-  wireUploadDock();
   document.querySelector("#logoutBtn")?.addEventListener("click", async () => {
     await api("/api/auth/logout", { method: "POST" });
     state.user = null;
@@ -287,7 +285,6 @@ function layout(content) {
 function setUploadActivityStatus(message) {
   state.uploadActivity.status = message;
   document.querySelector("#uploadStatus") && (document.querySelector("#uploadStatus").textContent = message);
-  refreshUploadDock();
 }
 
 function addUploadActivityLog(message) {
@@ -300,7 +297,6 @@ function addUploadActivityLog(message) {
     uploadLog.appendChild(line);
     uploadLog.scrollTop = uploadLog.scrollHeight;
   }
-  refreshUploadDock();
 }
 
 function recordSkippedUploadDetails(items) {
@@ -312,7 +308,6 @@ function recordSkippedUploadDetails(items) {
   })));
   state.uploadActivity.skippedDetails = state.uploadActivity.skippedDetails.slice(-25);
   refreshSkippedDetails();
-  refreshUploadDock();
 }
 
 function skippedReasonSummary() {
@@ -348,48 +343,6 @@ function refreshSkippedDetails() {
     return;
   }
   if (html) document.querySelector("#uploadLog")?.insertAdjacentHTML("beforebegin", html);
-}
-
-function uploadDock() {
-  if (!state.uploadActivity.running && !state.uploadActivity.status) return "";
-  const activity = state.uploadActivity;
-  const skipSummary = activity.skippedDetails?.length ? `<small>${escapeHtml(skippedReasonSummary())}</small>` : "";
-  return `
-    <aside class="upload-dock" id="uploadDock">
-      <div>
-        <strong>${activity.running ? "Upload running" : "Upload finished"}</strong>
-        <p>${escapeHtml(activity.status || "Preparing upload...")}</p>
-        <small>${activity.added} added, ${activity.skipped} skipped, ${activity.failed} failed</small>
-        ${skipSummary}
-      </div>
-      ${activity.running ? `<button type="button" class="danger" data-stop-global-upload>Stop</button>` : `<button type="button" class="secondary" data-hide-upload-dock>Hide</button>`}
-    </aside>
-  `;
-}
-
-function refreshUploadDock() {
-  const existing = document.querySelector("#uploadDock");
-  const html = uploadDock();
-  if (!html) {
-    existing?.remove();
-    return;
-  }
-  if (existing) existing.outerHTML = html;
-  else document.querySelector(".shell")?.insertAdjacentHTML("beforeend", html);
-  wireUploadDock();
-}
-
-function wireUploadDock() {
-  document.querySelector("[data-stop-global-upload]")?.addEventListener("click", async () => {
-    const upload = state.activeUpload;
-    upload?.controller?.abort();
-    setUploadActivityStatus("Stopping upload...");
-    if (upload?.uploadId) await api("/api/resources/upload-cancel", { method: "POST", body: { uploadId: upload.uploadId }, headers: uploadAuthHeaders() }).catch(() => {});
-  });
-  document.querySelector("[data-hide-upload-dock]")?.addEventListener("click", () => {
-    state.uploadActivity = { running: false, status: "", logs: [], skippedDetails: [], added: 0, skipped: 0, failed: 0 };
-    refreshUploadDock();
-  });
 }
 
 function wireLinks() {
@@ -1079,7 +1032,6 @@ function wireAdmin() {
       }
       state.pendingUploadFiles = [];
       updateUploadSelection();
-      window.alert(completionMessage);
     } catch (error) {
       const stopped = error.name === "AbortError";
       const authLost = isAuthError(error);
@@ -1092,7 +1044,6 @@ function wireAdmin() {
       state.activeUpload = null;
       state.uploadActivity.running = false;
       updateUploadSelection();
-      refreshUploadDock();
     }
   });
   document.querySelector("#userForm").addEventListener("submit", async (event) => {

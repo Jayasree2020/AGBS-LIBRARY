@@ -393,39 +393,6 @@ label {
   font-size: 12px;
 }
 
-.upload-dock {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  width: min(460px, calc(100vw - 36px));
-  padding: 14px;
-  background: #fffaf1;
-  border: 1px solid var(--line);
-  border-left: 5px solid var(--brand);
-  border-radius: 8px;
-  box-shadow: 0 12px 34px rgba(135, 16, 8, 0.16);
-}
-
-.upload-dock div {
-  min-width: 0;
-  flex: 1;
-}
-
-.upload-dock p {
-  margin: 4px 0;
-  color: var(--muted);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
-.upload-dock small {
-  color: var(--brand-strong);
-}
-
 .temp-password {
   display: grid;
   gap: 6px;
