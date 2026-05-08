@@ -331,14 +331,7 @@ async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress
 }
 
 async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgress, signal) {
-  if (!isZipFile(file)) {
-    try {
-      return await uploadDirectFile(file, fileIndex, totalFiles, options, onProgress, signal);
-    } catch (error) {
-      if (error.name === "AbortError") throw error;
-      onProgress(`Direct AWS upload is blocked. Sending ${uploadFilename(file)} in safe chunks...`);
-    }
-  }
+  if (!isZipFile(file)) onProgress(`Sending ${uploadFilename(file)} in safe chunks...`);
   let uploadId = "";
   try {
     const sent = await sendFileChunks(file, fileIndex, totalFiles, onProgress, signal);
