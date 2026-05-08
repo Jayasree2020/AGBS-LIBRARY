@@ -188,6 +188,7 @@ async function fileSha256(file) {
 
 async function duplicateSkipForFile(file, seenHashes, knownHashes) {
   const hash = await fileSha256(file);
+  file.libraryHash = hash;
   if (knownHashes.has(hash) || seenHashes.has(hash)) {
     return { skipped: { filename: uploadFilename(file), reason: "Exact duplicate ignored", hash } };
   }
@@ -224,6 +225,47 @@ async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, l
 }
 
 async function uploadDirectFile(file, options, onProgress, signal) {
+  const hash = file.libraryHash || await fileSha256(file);
+  file.libraryHash = hash;
+  onProgress(`Requesting fast AWS upload for ${uploadFilename(file)}...`);
+  try {
+    const ticket = await api("/api/resources/direct-upload-url", {
+      method: "POST",
+      body: {
+        filename: uploadFilename(file),
+        contentType: file.type || mimeForFilename(uploadFilename(file)),
+        size: file.size,
+        hash
+      },
+      signal,
+      headers: uploadAuthHeaders()
+    });
+    if (ticket.skipped) return { resources: [], skipped: [ticket.skipped], failed: [] };
+    if (ticket.direct && ticket.uploadUrl && ticket.storageName) {
+      onProgress(`Uploading ${uploadFilename(file)} directly to AWS...`);
+      const response = await fetch(ticket.uploadUrl, { method: "PUT", body: file, signal });
+      if (!response.ok) throw new Error(`AWS direct upload failed with ${response.status}`);
+      onProgress(`Saving ${uploadFilename(file)} in the library catalog...`);
+      return await api("/api/resources/direct-upload-complete", {
+        method: "POST",
+        body: {
+          storageName: ticket.storageName,
+          filename: uploadFilename(file),
+          originalFilename: uploadFilename(file),
+          contentType: file.type || mimeForFilename(uploadFilename(file)),
+          size: file.size,
+          hash,
+          autoCategorize: options.autoCategorize,
+          targetCategoryId: options.targetCategoryId
+        },
+        signal,
+        headers: uploadAuthHeaders()
+      });
+    }
+  } catch (error) {
+    if (error.name === "AbortError") throw error;
+    onProgress(`Fast AWS upload unavailable for ${uploadFilename(file)}. Using standard upload...`);
+  }
   const form = new FormData();
   form.append("autoCategorize", String(options.autoCategorize));
   form.append("targetCategoryId", options.targetCategoryId);
@@ -233,7 +275,7 @@ async function uploadDirectFile(file, options, onProgress, signal) {
 }
 
 async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgress, signal) {
-  if (!isZipFile(file) && file.size <= DIRECT_FILE_UPLOAD_LIMIT) {
+  if (!isZipFile(file)) {
     return await uploadDirectFile(file, options, onProgress, signal);
   }
   let uploadId = "";

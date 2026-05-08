@@ -212,8 +212,8 @@ class ObjectStore {
   }
 
   async init() {
-    const { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } = await import("@aws-sdk/client-s3");
-    this.commands = { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand };
+    const { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand, PutBucketCorsCommand } = await import("@aws-sdk/client-s3");
+    this.commands = { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectsCommand, PutBucketCorsCommand };
     this.client = new S3Client({
       region: this.region,
       ...(this.endpoint ? { endpoint: this.endpoint } : {}),
@@ -225,6 +225,7 @@ class ObjectStore {
       const exists = await this.exists(key);
       if (!exists) await this.putJson(key, []);
     }
+    await this.ensureCors().catch(() => {});
   }
 
   key(value) {
@@ -272,6 +273,59 @@ class ObjectStore {
       }
     }
     throw lastError;
+  }
+
+  async ensureCors() {
+    await this.s3Send(new this.commands.PutBucketCorsCommand({
+      Bucket: this.bucket,
+      CORSConfiguration: {
+        CORSRules: [{
+          AllowedMethods: ["PUT"],
+          AllowedOrigins: ["https://agbslibrary.com", "https://www.agbslibrary.com", "http://localhost:3000"],
+          AllowedHeaders: ["*"],
+          ExposeHeaders: ["ETag"],
+          MaxAgeSeconds: 3000
+        }]
+      }
+    }), 1);
+  }
+
+  presignedPutUrl(name, expiresSeconds = 900) {
+    if (this.endpoint) return null;
+    const key = this.fileKey(name);
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+    const dateStamp = amzDate.slice(0, 8);
+    const host = `${this.bucket}.s3.${this.region}.amazonaws.com`;
+    const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`;
+    const signedHeaders = "host";
+    const params = {
+      "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+      "X-Amz-Credential": `${this.credentials.accessKeyId}/${credentialScope}`,
+      "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
+      "X-Amz-Date": amzDate,
+      "X-Amz-Expires": String(expiresSeconds),
+      "X-Amz-SignedHeaders": signedHeaders
+    };
+    const canonicalUri = `/${key.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+    const canonicalQuery = Object.entries(params)
+      .map(([paramKey, value]) => `${encodeURIComponent(paramKey)}=${encodeURIComponent(value)}`)
+      .sort()
+      .join("&");
+    const canonicalRequest = ["PUT", canonicalUri, canonicalQuery, `host:${host}\n`, signedHeaders, "UNSIGNED-PAYLOAD"].join("\n");
+    const stringToSign = [
+      "AWS4-HMAC-SHA256",
+      amzDate,
+      credentialScope,
+      crypto.createHash("sha256").update(canonicalRequest).digest("hex")
+    ].join("\n");
+    const hmac = (keyValue, value, encoding) => crypto.createHmac("sha256", keyValue).update(value).digest(encoding);
+    const dateKey = hmac(`AWS4${this.credentials.secretAccessKey}`, dateStamp);
+    const regionKey = hmac(dateKey, this.region);
+    const serviceKey = hmac(regionKey, "s3");
+    const signingKey = hmac(serviceKey, "aws4_request");
+    const signature = hmac(signingKey, stringToSign, "hex");
+    return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
   }
 
   async bodyToBuffer(body) {
@@ -549,7 +603,9 @@ async function userFromUploadToken(req) {
     "/api/resources/upload",
     "/api/resources/upload-chunk",
     "/api/resources/upload-cancel",
-    "/api/resources/upload-complete"
+    "/api/resources/upload-complete",
+    "/api/resources/direct-upload-url",
+    "/api/resources/direct-upload-complete"
   ]);
   if (!allowedUploadPaths.has(pathname)) return null;
   const [payload, signature] = raw.split(".");
@@ -774,6 +830,50 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
   const saved = typeof db.insertMany === "function" ? await db.insertMany("resources", resourceRecords) : [];
   const skipped = typeof db.insertMany === "function" ? await db.insertMany("skippedUploads", skippedRecords) : [];
   return { saved, skipped };
+}
+
+async function registerDirectUploadedResource({ upload, categories, selectedCategory, autoCategorize, user }) {
+  const filename = String(upload.filename || upload.originalFilename || "").trim();
+  const extension = resourceExtensionFor({ filename, contentType: upload.contentType || "" });
+  const hash = String(upload.hash || "");
+  const size = Number(upload.size || 0);
+  const storageName = String(upload.storageName || "");
+  const file = { filename, content: Buffer.alloc(Math.max(0, size)), contentType: upload.contentType || mimeTypes[extension] || "application/octet-stream" };
+  const batch = await db.insert("uploadBatches", { createdBy: user.id, fileCount: 1, status: "processed", uploadMode: "direct-s3" });
+  if (!allowedResourceExtensions.includes(extension)) {
+    const skipped = await recordSkippedUpload({ file, reason: "Only PDF and EPUB files are allowed", user, batch, hash });
+    if (storageName && typeof db.deleteFile === "function") await db.deleteFile(storageName).catch(() => {});
+    return { saved: [], skipped: [skipped] };
+  }
+  const existing = await db.findOne("resources", (resource) => resource.metadata?.hash === hash);
+  if (existing) {
+    const skipped = await recordSkippedUpload({ file, reason: `Exact duplicate already exists: ${existing.title || existing.originalFilename || "same file"}`, user, batch, hash });
+    if (storageName && typeof db.deleteFile === "function") await db.deleteFile(storageName).catch(() => {});
+    return { saved: [], skipped: [skipped] };
+  }
+  const category = autoCategorize ? (categoryForFile(filename, categories) || selectedCategory) : selectedCategory;
+  const suggested = category?.name || selectedCategory?.name || "";
+  const title = inferTitle(filename);
+  const author = inferAuthor(filename);
+  const classification = classifyResource({ title, originalFilename: filename, category });
+  const resource = await db.insert("resources", {
+    title,
+    author,
+    format: extension.slice(1),
+    resourceType: "E-book",
+    originalFilename: filename,
+    storageName,
+    categoryId: category?.id || "",
+    suggestedCategory: suggested || category?.name || "",
+    classification,
+    bibliography: buildBibliography({ title, author, format: extension.slice(1), originalFilename: filename, category, classification }),
+    uploadMode: autoCategorize ? "auto-direct-s3" : "direct-s3",
+    status: "published",
+    uploadBatchId: batch.id,
+    createdBy: user.id,
+    metadata: { size, contentType: upload.contentType || mimeTypes[extension] || "application/octet-stream", hash, duplicateCheck: "exact-hash", directUpload: true }
+  });
+  return { saved: [resource], skipped: [] };
 }
 
 function safeChunkName(value) {
@@ -1484,6 +1584,36 @@ async function routeApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/resources/upload-token") {
     if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
     return json(res, 200, { uploadToken: makeUploadToken(user), expiresInHours: 12 });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/resources/direct-upload-url") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const body = await bodyJson(req);
+    const filename = String(body.filename || "").trim();
+    const extension = resourceExtensionFor({ filename, contentType: body.contentType || "" });
+    const hash = String(body.hash || "");
+    if (!allowedResourceExtensions.includes(extension)) return json(res, 200, { skipped: { filename, reason: "Only PDF and EPUB files are allowed" } });
+    const existing = await db.findOne("resources", (resource) => resource.metadata?.hash === hash);
+    if (existing) return json(res, 200, { skipped: { filename, reason: `Exact duplicate ignored: ${existing.title || existing.originalFilename || "same file"}` } });
+    if (typeof db.presignedPutUrl !== "function") return json(res, 200, { direct: false });
+    const storageName = `${crypto.randomUUID()}${extension}`;
+    const uploadUrl = db.presignedPutUrl(storageName);
+    return json(res, 200, { direct: Boolean(uploadUrl), uploadUrl, storageName, expiresInSeconds: 900 });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/resources/direct-upload-complete") {
+    if (!isStaff(user)) return json(res, 403, { error: "Admin access required." });
+    const body = await bodyJson(req);
+    const categories = await db.all("categories");
+    const selectedCategory = categories.find((item) => item.id === body.targetCategoryId) || categories[0];
+    const { saved, skipped } = await registerDirectUploadedResource({
+      upload: body,
+      categories,
+      selectedCategory,
+      autoCategorize: body.autoCategorize !== false,
+      user
+    });
+    return json(res, 201, { resources: saved.map(publicResource), skipped });
   }
 
   if (req.method === "POST" && url.pathname === "/api/resources/upload") {
