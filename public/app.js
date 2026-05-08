@@ -196,6 +196,36 @@ async function duplicateSkipForFile(file, seenHashes, knownHashes) {
   return { hash };
 }
 
+function requestWithUploadProgress(url, { method = "POST", body, headers = {}, signal, jsonResponse = true, onUploadProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    xhr.withCredentials = !/^https?:\/\//i.test(url) || url.startsWith(window.location.origin);
+    for (const [name, value] of Object.entries(headers || {})) xhr.setRequestHeader(name, value);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && typeof onUploadProgress === "function") {
+        onUploadProgress(event.loaded / event.total);
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (!jsonResponse) return resolve({ ok: true, status: xhr.status });
+        try {
+          resolve(xhr.responseText ? JSON.parse(xhr.responseText) : {});
+        } catch {
+          reject(new Error("Upload response could not be read."));
+        }
+      } else {
+        reject(new ApiError(`Upload failed with status ${xhr.status}.`, xhr.status));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Upload connection failed."));
+    xhr.onabort = () => reject(new DOMException("Upload stopped.", "AbortError"));
+    signal?.addEventListener("abort", () => xhr.abort(), { once: true });
+    xhr.send(body);
+  });
+}
+
 async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, label = "Uploading") {
   const uploadId = crypto.randomUUID();
   state.activeUpload = { ...(state.activeUpload || {}), uploadId };
@@ -218,13 +248,20 @@ async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, l
     form.append("fileIndex", "0");
     form.append("chunkIndex", String(chunkIndex));
     form.append("chunk", chunk, `0-${chunkIndex}.part`);
-    await api("/api/resources/upload-chunk", { method: "POST", body: form, signal, headers: uploadAuthHeaders() });
+    await requestWithUploadProgress("/api/resources/upload-chunk", {
+      method: "POST",
+      body: form,
+      signal,
+      headers: uploadAuthHeaders(),
+      onUploadProgress: (fraction) => setUploadProgress(fileIndex + ((chunkIndex + fraction) / metadata.totalChunks), totalFiles, `${label} ${filename}: ${Math.round(((chunkIndex + fraction) / metadata.totalChunks) * 100)}%`)
+    });
+    setUploadProgress(fileIndex + ((chunkIndex + 1) / metadata.totalChunks), totalFiles, `${label} ${filename}: ${chunkIndex + 1} of ${metadata.totalChunks} steps.`);
     onProgress(`${label} ${filename}: ${chunkIndex + 1} of ${metadata.totalChunks} steps.`);
   }
   return { uploadId, metadata };
 }
 
-async function uploadDirectFile(file, options, onProgress, signal) {
+async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress, signal) {
   const hash = file.libraryHash || await fileSha256(file);
   file.libraryHash = hash;
   onProgress(`Requesting fast AWS upload for ${uploadFilename(file)}...`);
@@ -246,8 +283,14 @@ async function uploadDirectFile(file, options, onProgress, signal) {
       let uploadedDirectly = false;
       if (ticket.uploadUrl) {
         try {
-          const response = await fetch(ticket.uploadUrl, { method: "PUT", body: file, signal });
-          uploadedDirectly = response.ok;
+          await requestWithUploadProgress(ticket.uploadUrl, {
+            method: "PUT",
+            body: file,
+            signal,
+            jsonResponse: false,
+            onUploadProgress: (fraction) => setUploadProgress(fileIndex + fraction, totalFiles, `Uploading ${uploadFilename(file)}: ${Math.round(fraction * 100)}%`)
+          });
+          uploadedDirectly = true;
         } catch {}
       }
       if (!uploadedDirectly) throw new Error("AWS direct upload was blocked");
@@ -278,13 +321,19 @@ async function uploadDirectFile(file, options, onProgress, signal) {
   form.append("targetCategoryId", options.targetCategoryId);
   form.append("files", file, uploadFilename(file));
   onProgress(`Uploading ${uploadFilename(file)} in fast mode...`);
-  return await api("/api/resources/upload", { method: "POST", body: form, signal, headers: uploadAuthHeaders() });
+  return await requestWithUploadProgress("/api/resources/upload", {
+    method: "POST",
+    body: form,
+    signal,
+    headers: uploadAuthHeaders(),
+    onUploadProgress: (fraction) => setUploadProgress(fileIndex + fraction, totalFiles, `Uploading ${uploadFilename(file)}: ${Math.round(fraction * 100)}%`)
+  });
 }
 
 async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgress, signal) {
   if (!isZipFile(file)) {
     try {
-      return await uploadDirectFile(file, options, onProgress, signal);
+      return await uploadDirectFile(file, fileIndex, totalFiles, options, onProgress, signal);
     } catch (error) {
       if (error.name === "AbortError") throw error;
       onProgress(`Direct AWS upload is blocked. Sending ${uploadFilename(file)} in safe chunks...`);
@@ -495,7 +544,7 @@ function setUploadActivityStatus(message) {
   document.querySelector("#uploadStatus") && (document.querySelector("#uploadStatus").textContent = message);
 }
 
-function setUploadProgress(completed = 0, total = 0) {
+function setUploadProgress(completed = 0, total = 0, label = "") {
   const safeTotal = Math.max(0, Number(total || 0));
   const safeCompleted = Math.max(0, Math.min(safeTotal, Number(completed || 0)));
   state.uploadActivity.progressCompleted = safeCompleted;
@@ -513,7 +562,8 @@ function setUploadProgress(completed = 0, total = 0) {
   const percent = Math.round((safeCompleted / safeTotal) * 100);
   wrap.hidden = false;
   bar.value = percent;
-  text.textContent = `${percent}% complete (${safeCompleted} of ${safeTotal} books checked)`;
+  const completedText = Number.isInteger(safeCompleted) ? String(safeCompleted) : safeCompleted.toFixed(1);
+  text.textContent = label || `${percent}% complete (${completedText} of ${safeTotal} books checked)`;
 }
 
 function addUploadActivityLog(message) {
@@ -1244,7 +1294,7 @@ function wireAdmin() {
       uploadController = new AbortController();
       const uploadSession = await api("/api/resources/upload-token", { method: "POST" });
       state.activeUpload = { controller: uploadController, token: uploadSession.uploadToken };
-      state.uploadActivity = { running: true, status: "Uploading...", logs: [], skippedDetails: [], added: 0, skipped: 0, failed: 0 };
+      state.uploadActivity = { running: true, status: "Uploading...", logs: [], skippedDetails: [], added: 0, skipped: 0, failed: 0, progressCompleted: 0, progressTotal: files.length };
       uploadButton.disabled = true;
       clearUploadButton.disabled = true;
       stopUploadButton.disabled = false;
@@ -1254,7 +1304,7 @@ function wireAdmin() {
       const knownHashes = await loadResourceHashes().catch(() => state.resourceHashes || new Set());
       addUploadLog(`Duplicate check loaded. Uploading only new PDF/EPUB files.`);
       let data;
-      const streamingUpload = totalSize > 4 * 1024 * 1024 || files.some(isZipFile);
+      const streamingUpload = true;
       if (streamingUpload) {
         data = await uploadChunked(files, options, (message) => {
           setUploadActivityStatus(message);
