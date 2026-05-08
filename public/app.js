@@ -241,10 +241,21 @@ async function uploadDirectFile(file, options, onProgress, signal) {
       headers: uploadAuthHeaders()
     });
     if (ticket.skipped) return { resources: [], skipped: [ticket.skipped], failed: [] };
-    if (ticket.direct && ticket.uploadUrl && ticket.storageName) {
+    if (ticket.direct && ticket.storageName) {
       onProgress(`Uploading ${uploadFilename(file)} directly to AWS...`);
-      const response = await fetch(ticket.uploadUrl, { method: "PUT", body: file, signal });
-      if (!response.ok) throw new Error(`AWS direct upload failed with ${response.status}`);
+      let uploadedDirectly = false;
+      if (ticket.uploadUrl) {
+        try {
+          const response = await fetch(ticket.uploadUrl, { method: "PUT", body: file, signal });
+          uploadedDirectly = response.ok;
+        } catch {}
+      }
+      if (!uploadedDirectly && ticket.uploadPost) {
+        onProgress(`Using AWS browser form upload for ${uploadFilename(file)}...`);
+        await uploadWithS3Form(ticket.uploadPost, file, signal);
+        uploadedDirectly = true;
+      }
+      if (!uploadedDirectly) throw new Error("AWS direct upload was blocked");
       onProgress(`Saving ${uploadFilename(file)} in the library catalog...`);
       return await api("/api/resources/direct-upload-complete", {
         method: "POST",
@@ -272,6 +283,56 @@ async function uploadDirectFile(file, options, onProgress, signal) {
   form.append("files", file, uploadFilename(file));
   onProgress(`Uploading ${uploadFilename(file)} in fast mode...`);
   return await api("/api/resources/upload", { method: "POST", body: form, signal, headers: uploadAuthHeaders() });
+}
+
+function uploadWithS3Form(uploadPost, file, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Upload stopped.", "AbortError"));
+    const iframeName = `s3Upload_${crypto.randomUUID().replace(/-/g, "")}`;
+    const iframe = document.createElement("iframe");
+    iframe.name = iframeName;
+    iframe.hidden = true;
+    const form = document.createElement("form");
+    form.hidden = true;
+    form.method = "POST";
+    form.enctype = "multipart/form-data";
+    form.action = uploadPost.url;
+    form.target = iframeName;
+    for (const [name, value] of Object.entries(uploadPost.fields || {})) {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = value;
+      form.appendChild(input);
+    }
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.name = "file";
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    fileInput.files = transfer.files;
+    form.appendChild(fileInput);
+    const cleanup = () => {
+      iframe.remove();
+      form.remove();
+      signal?.removeEventListener("abort", abort);
+    };
+    const abort = () => {
+      cleanup();
+      reject(new DOMException("Upload stopped.", "AbortError"));
+    };
+    let submitted = false;
+    iframe.addEventListener("load", () => {
+      if (!submitted) return;
+      cleanup();
+      resolve();
+    });
+    signal?.addEventListener("abort", abort, { once: true });
+    document.body.appendChild(iframe);
+    document.body.appendChild(form);
+    submitted = true;
+    form.submit();
+  });
 }
 
 async function uploadChunkedFile(file, fileIndex, totalFiles, options, onProgress, signal) {

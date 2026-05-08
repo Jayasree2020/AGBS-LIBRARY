@@ -328,6 +328,51 @@ class ObjectStore {
     return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
   }
 
+  signingKey(dateStamp) {
+    const hmac = (keyValue, value) => crypto.createHmac("sha256", keyValue).update(value).digest();
+    const dateKey = hmac(`AWS4${this.credentials.secretAccessKey}`, dateStamp);
+    const regionKey = hmac(dateKey, this.region);
+    const serviceKey = hmac(regionKey, "s3");
+    return hmac(serviceKey, "aws4_request");
+  }
+
+  presignedPost(name, maxBytes = 5 * 1024 * 1024 * 1024) {
+    if (this.endpoint) return null;
+    const key = this.fileKey(name);
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+    const dateStamp = amzDate.slice(0, 8);
+    const credential = `${this.credentials.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
+    const policy = {
+      expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      conditions: [
+        { bucket: this.bucket },
+        { key },
+        { "x-amz-algorithm": "AWS4-HMAC-SHA256" },
+        { "x-amz-credential": credential },
+        { "x-amz-date": amzDate },
+        ["content-length-range", 0, maxBytes]
+      ]
+    };
+    const encodedPolicy = Buffer.from(JSON.stringify(policy)).toString("base64");
+    const signature = crypto.createHmac("sha256", this.signingKey(dateStamp)).update(encodedPolicy).digest("hex");
+    return {
+      url: `https://${this.bucket}.s3.${this.region}.amazonaws.com/`,
+      fields: {
+        key,
+        "x-amz-algorithm": "AWS4-HMAC-SHA256",
+        "x-amz-credential": credential,
+        "x-amz-date": amzDate,
+        policy: encodedPolicy,
+        "x-amz-signature": signature
+      }
+    };
+  }
+
+  async fileExists(name) {
+    return await this.exists(this.fileKey(name));
+  }
+
   async bodyToBuffer(body) {
     const chunks = [];
     for await (const chunk of body) chunks.push(Buffer.from(chunk));
@@ -850,6 +895,9 @@ async function registerDirectUploadedResource({ upload, categories, selectedCate
     const skipped = await recordSkippedUpload({ file, reason: `Exact duplicate already exists: ${existing.title || existing.originalFilename || "same file"}`, user, batch, hash });
     if (storageName && typeof db.deleteFile === "function") await db.deleteFile(storageName).catch(() => {});
     return { saved: [], skipped: [skipped] };
+  }
+  if (typeof db.fileExists === "function" && !await db.fileExists(storageName)) {
+    throw new Error("Direct AWS upload did not finish. The app will retry with standard upload.");
   }
   const category = autoCategorize ? (categoryForFile(filename, categories) || selectedCategory) : selectedCategory;
   const suggested = category?.name || selectedCategory?.name || "";
@@ -1598,7 +1646,8 @@ async function routeApi(req, res, url) {
     if (typeof db.presignedPutUrl !== "function") return json(res, 200, { direct: false });
     const storageName = `${crypto.randomUUID()}${extension}`;
     const uploadUrl = db.presignedPutUrl(storageName);
-    return json(res, 200, { direct: Boolean(uploadUrl), uploadUrl, storageName, expiresInSeconds: 900 });
+    const uploadPost = typeof db.presignedPost === "function" ? db.presignedPost(storageName, Math.max(1, Number(body.size || 0) + 1024 * 1024)) : null;
+    return json(res, 200, { direct: Boolean(uploadUrl || uploadPost), uploadUrl, uploadPost, storageName, expiresInSeconds: 900 });
   }
 
   if (req.method === "POST" && url.pathname === "/api/resources/direct-upload-complete") {
