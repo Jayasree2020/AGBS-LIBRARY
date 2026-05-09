@@ -2,17 +2,27 @@
 
 AGBS LIBRARY is a secure digital library portal for off-campus seminary students. It supports controlled student access to PDF and EPUB study resources, admin-managed uploads, department-based categorization, AWS S3 storage, and reading activity tracking.
 
-Live site target: [https://www.agbslibrary.com](https://www.agbslibrary.com)
+Live HTTP site:
+
+- [http://agbslibrary.com](http://agbslibrary.com)
+- [http://www.agbslibrary.com](http://www.agbslibrary.com)
+
+Temporary AWS environment URL:
+
+- [http://Agbs-library-aws-1-env.eba-8uziqsiu.us-east-1.elasticbeanstalk.com](http://Agbs-library-aws-1-env.eba-8uziqsiu.us-east-1.elasticbeanstalk.com)
 
 GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github.com/Jayasree2020/AGBS-LIBRARY)
 
 ## Current Status
 
-- Production hosting is being moved from Vercel to AWS because the library upload scale is too large for the current Vercel fair-use limits.
+- Production hosting has moved from Vercel to AWS Elastic Beanstalk because the library upload scale is too large for the current Vercel fair-use limits.
 - GitHub remains the source of truth for all code changes.
 - Permanent file and data storage is AWS S3.
+- Hostinger DNS points the public domain to the AWS Elastic Beanstalk environment.
+- HTTP is live on the public domain. HTTPS/SSL is the remaining setup step and requires an AWS Certificate Manager certificate plus a load-balanced Elastic Beanstalk environment.
+- HTTPS can time out until the AWS certificate and HTTPS listener are attached.
 - The app uses the Amazing Grace Biblical Seminary logo and a matching red, gold, flame-orange, and warm cream color system.
-- R2 and MongoDB are not part of the current production setup.
+- Vercel, Cloudflare R2, and MongoDB are not part of the current production setup.
 - Uploaded books are stored in AWS as complete files, not visible upload parts.
 - Admin uploads are automatically published into the library.
 - Valid PDF/EPUB files are added unless the exact same file already exists.
@@ -180,13 +190,16 @@ Admin reports show:
 Student/Admin Browser
         |
         v
-AWS App Runner or container hosting
+Hostinger DNS
+        |
+        v
+AWS Elastic Beanstalk
         |
         v
 AWS S3
-  - books/
-  - data/
-  - tmp/uploads/
+  - agbs-library/books/
+  - agbs-library/data/
+  - agbs-library/tmp/
 ```
 
 AWS S3 storage layout:
@@ -247,18 +260,21 @@ On this Windows workspace, `START-AGBS-LIBRARY.cmd` can also start the local ser
 
 ## Current Plan
 
-1. Move the web app and API from Vercel to AWS hosting.
+1. Keep the web app running on AWS Elastic Beanstalk.
 2. Use AWS S3 for all permanent files and JSON records.
 3. Push every code change to GitHub before deployment.
-4. Keep the site branding aligned with the seminary logo.
-5. Keep uploads automated: no manual publish button.
-6. Keep student uploads disabled.
-7. Upload books from the admin dashboard in batches.
-8. Watch the admin storage panel after uploads.
-9. Use the upload log to notice repeated files while keeping the admin dashboard clean.
-10. Use classification exports for library cataloging and bibliography reports.
-11. Configure Google OAuth later if Gmail sign-in is required.
-12. Add deeper PDF/EPUB page-location tracking later if needed.
+4. Deploy updated Elastic Beanstalk ZIP versions from the repository code.
+5. Finish AWS HTTPS by issuing an ACM certificate for `agbslibrary.com` and `www.agbslibrary.com`.
+6. Move the Elastic Beanstalk environment from single-instance to load-balanced before attaching the HTTPS listener.
+7. Keep the site branding aligned with the seminary logo.
+8. Keep uploads automated: no manual publish button.
+9. Keep student uploads disabled.
+10. Upload books from the admin dashboard in batches.
+11. Watch the admin storage panel after uploads.
+12. Use the upload log to notice repeated files while keeping the admin dashboard clean.
+13. Use classification exports for library cataloging and bibliography reports.
+14. Configure Google OAuth later if Gmail sign-in is required.
+15. Add deeper PDF/EPUB page-location tracking later if needed.
 
 ## AWS Hosting
 
@@ -266,9 +282,17 @@ This repository now includes:
 
 - `Dockerfile`
 - `.dockerignore`
+- `Procfile`
 - `AWS_HOSTING_GUIDE.md`
 
-Use [AWS_HOSTING_GUIDE.md](AWS_HOSTING_GUIDE.md) to deploy the app on AWS App Runner or another AWS container service. The app still uses AWS S3 for books, data records, temporary upload chunks, storage tracking, and protected file serving.
+Use [AWS_HOSTING_GUIDE.md](AWS_HOSTING_GUIDE.md) to deploy or update the app on AWS Elastic Beanstalk. The app uses AWS S3 for books, data records, temporary upload chunks, storage tracking, and protected file serving.
+
+Elastic Beanstalk currently runs the Node.js app on port `8080` behind nginx. The `Procfile` starts the server with `npm start`.
+
+Current public domain status:
+
+- HTTP: active on `agbslibrary.com` and `www.agbslibrary.com`.
+- HTTPS: pending AWS Certificate Manager validation and load balancer HTTPS listener setup.
 
 ## Handover Document
 
