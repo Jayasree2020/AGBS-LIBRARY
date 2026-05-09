@@ -1,14 +1,17 @@
 # AWS Hosting Guide For AGBS LIBRARY
 
-This guide moves the app hosting from Vercel to AWS while keeping GitHub as the source of truth.
+This guide records the current production AWS setup for AGBS LIBRARY.
 
-## Target Architecture
+## Current Production Setup
 
 ```text
 GitHub repository
         |
         v
-AWS App Runner or ECS/Fargate
+Elastic Beanstalk application version ZIP
+        |
+        v
+AWS Elastic Beanstalk
         |
         v
 AWS S3 bucket
@@ -17,13 +20,17 @@ AWS S3 bucket
   - agbs-library/tmp/
 ```
 
-Recommended first AWS hosting choice: **AWS App Runner**.
+Production hosting is now AWS Elastic Beanstalk. Vercel is no longer the production host.
 
-Why App Runner:
+## Live URLs
 
-- It runs this Node app without managing a server.
-- It can connect to GitHub or to a container image built from this repository.
-- It works well because book uploads go directly to S3, so the web server is not carrying the full 400 GB upload load.
+HTTP is active:
+
+- `http://agbslibrary.com`
+- `http://www.agbslibrary.com`
+- `http://Agbs-library-aws-1-env.eba-8uziqsiu.us-east-1.elasticbeanstalk.com`
+
+HTTPS is pending. Until AWS Certificate Manager and an HTTPS listener are configured, `https://` may time out.
 
 ## GitHub Rule
 
@@ -33,24 +40,43 @@ All code changes must be pushed to:
 https://github.com/Jayasree2020/AGBS-LIBRARY
 ```
 
-Do not edit production files manually in AWS. Make changes in this repository, then redeploy AWS from GitHub/container.
+Do not edit production files manually in AWS. Make changes in this repository, create a new Elastic Beanstalk application version ZIP, then deploy that version.
 
-## Files Added For AWS
+## Files Used By AWS
 
-- `Dockerfile`: packages the Node app for AWS hosting.
-- `.dockerignore`: keeps secrets, local data, and temporary files out of the container.
+- `server.js`: Node.js application server.
+- `public/`: browser app, styles, and assets.
+- `api/`: compatibility entrypoint files.
+- `package.json` and `package-lock.json`: Node dependencies.
+- `Procfile`: tells Elastic Beanstalk to run `npm start`.
+- `Dockerfile` and `.dockerignore`: retained for a future container-based AWS deployment if needed.
 
-## Required AWS Environment Variables
+## Elastic Beanstalk Settings
 
-Set these in the AWS hosting service, not in GitHub code:
+Current environment:
 
 ```text
-PORT=3000
+Application: agbs-library
+Environment: Agbs-library-aws-1-env
+Platform: Node.js 22 running on 64bit Amazon Linux 2023
+Environment type: Single instance
+Proxy: nginx
+App port: 8080
+```
+
+The current single-instance setup is enough for HTTP testing and admin work. AWS-only HTTPS requires moving the environment to a load-balanced configuration so an ACM certificate can be attached to a port 443 listener.
+
+## Required Environment Variables
+
+Set these in Elastic Beanstalk environment properties, not in GitHub code:
+
+```text
+PORT=8080
 NODE_ENV=production
 BASE_URL=https://www.agbslibrary.com
 SESSION_SECRET=<long random secret>
 ADMIN_EMAIL=<admin email>
-ADMIN_BOOTSTRAP_PASSWORD=<admin password only if needed>
+ADMIN_BOOTSTRAP_PASSWORD=<admin bootstrap password only if needed>
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=<app IAM access key>
 AWS_SECRET_ACCESS_KEY=<app IAM secret key>
@@ -65,9 +91,35 @@ GOOGLE_REDIRECT_URI=https://www.agbslibrary.com/auth/google/callback
 
 Never commit real secrets to GitHub.
 
+## DNS Records
+
+Hostinger DNS should point to AWS:
+
+```text
+A      @      34.192.31.166
+CNAME  www    Agbs-library-aws-1-env.eba-8uziqsiu.us-east-1.elasticbeanstalk.com
+```
+
+No Vercel DNS records should remain.
+
+## AWS SSL/HTTPS Plan
+
+1. In AWS Certificate Manager, request a public certificate for:
+   - `agbslibrary.com`
+   - `www.agbslibrary.com`
+2. Use DNS validation.
+3. Add the ACM validation CNAME records in Hostinger DNS.
+4. Wait until ACM shows the certificate status as `Issued`.
+5. Change the Elastic Beanstalk environment from single-instance to load-balanced.
+6. Add an HTTPS listener on port `443`.
+7. Attach the issued ACM certificate.
+8. Test:
+   - `https://agbslibrary.com`
+   - `https://www.agbslibrary.com`
+
 ## S3 CORS
 
-The S3 bucket must allow browser upload from the live domain:
+The S3 bucket must allow browser uploads from the live domain:
 
 ```json
 [
@@ -76,7 +128,9 @@ The S3 bucket must allow browser upload from the live domain:
     "AllowedMethods": ["PUT", "POST"],
     "AllowedOrigins": [
       "https://agbslibrary.com",
-      "https://www.agbslibrary.com"
+      "https://www.agbslibrary.com",
+      "http://agbslibrary.com",
+      "http://www.agbslibrary.com"
     ],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3000
@@ -84,44 +138,23 @@ The S3 bucket must allow browser upload from the live domain:
 ]
 ```
 
-## App Runner Deployment Steps
-
-1. Push all latest code to GitHub.
-2. In AWS Console, search **App Runner**.
-3. Create service.
-4. Choose a source:
-   - If AWS offers GitHub source for this repo, connect `Jayasree2020/AGBS-LIBRARY`.
-   - If using container image, build this repo using the included `Dockerfile`, push the image to ECR, then connect App Runner to that ECR image.
-5. Set service port to `3000`.
-6. Add every required environment variable above.
-7. Deploy.
-8. Open the temporary App Runner URL and confirm `/api/config` shows:
-
-```json
-{
-  "storageProvider": "aws-s3"
-}
-```
-
-9. Move the custom domain:
-   - Add `agbslibrary.com` and `www.agbslibrary.com` to App Runner custom domains.
-   - Update DNS records exactly as AWS shows.
-   - Wait for HTTPS certificate validation.
-
-## Upload Rules After AWS Move
+## Upload Rules
 
 - Use Chrome or Edge for very large folder uploads.
 - Use **Open folder tree** in the admin upload panel.
 - Keep the computer awake while uploading.
 - Uploads go directly to S3 where possible.
 - Catalog writes are serialized so parallel uploads do not overwrite resource records.
-- Failed direct uploads retry with AWS form upload, then safe chunked upload.
+- Exact duplicate files are skipped by content hash.
+- ZIP files are opened in the browser and valid PDF/EPUB files inside are uploaded as individual books.
 
 ## Verification Checklist
 
-- Home page opens from AWS URL.
+- Home page opens from the Elastic Beanstalk URL.
+- `http://agbslibrary.com` opens the app.
+- `http://www.agbslibrary.com` opens the app.
+- `/api/config` reports `storageProvider: "aws-s3"`.
 - Admin login works.
-- `/api/config` reports AWS S3 storage.
 - Admin can upload one PDF.
 - Admin can upload one EPUB.
 - Admin can upload a folder with subfolders.
@@ -129,3 +162,12 @@ The S3 bucket must allow browser upload from the live domain:
 - Student can open the protected reader.
 - Storage panel updates after upload.
 - GitHub contains the deployed code.
+
+## Security Cleanup
+
+If any AWS key, GitHub token, or admin password has appeared in chat, logs, screenshots, or browser history:
+
+1. Create a replacement key or password.
+2. Update Elastic Beanstalk environment properties.
+3. Confirm the app still works.
+4. Deactivate/delete the exposed old value.
