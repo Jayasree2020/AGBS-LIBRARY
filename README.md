@@ -2,13 +2,14 @@
 
 AGBS LIBRARY is a secure digital library portal for off-campus seminary students. It supports controlled student access to PDF and EPUB study resources, admin-managed uploads, department-based categorization, AWS S3 storage, and reading activity tracking.
 
-Live site: [https://www.agbslibrary.com](https://www.agbslibrary.com)
+Live site target: [https://www.agbslibrary.com](https://www.agbslibrary.com)
 
 GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github.com/Jayasree2020/AGBS-LIBRARY)
 
 ## Current Status
 
-- Production is deployed on Vercel.
+- Production hosting is being moved from Vercel to AWS because the library upload scale is too large for the current Vercel fair-use limits.
+- GitHub remains the source of truth for all code changes.
 - Permanent file and data storage is AWS S3.
 - The app uses the Amazing Grace Biblical Seminary logo and a matching red, gold, flame-orange, and warm cream color system.
 - R2 and MongoDB are not part of the current production setup.
@@ -179,7 +180,7 @@ Admin reports show:
 Student/Admin Browser
         |
         v
-Vercel App / Serverless API
+AWS App Runner or container hosting
         |
         v
 AWS S3
@@ -207,7 +208,7 @@ Core data collections:
 
 ## Environment Variables
 
-Set these in Vercel Project Settings:
+Set these in AWS hosting environment variables:
 
 ```text
 ADMIN_EMAIL
@@ -246,17 +247,28 @@ On this Windows workspace, `START-AGBS-LIBRARY.cmd` can also start the local ser
 
 ## Current Plan
 
-1. Use Vercel only for the web app and API.
+1. Move the web app and API from Vercel to AWS hosting.
 2. Use AWS S3 for all permanent files and JSON records.
-3. Keep the site branding aligned with the seminary logo.
-4. Keep uploads automated: no manual publish button.
-5. Keep student uploads disabled.
-6. Upload books from the admin dashboard in batches.
-7. Watch the admin storage panel after uploads.
-8. Use the upload log to notice repeated files while keeping the admin dashboard clean.
-9. Use classification exports for library cataloging and bibliography reports.
-10. Configure Google OAuth later if Gmail sign-in is required.
-11. Add deeper PDF/EPUB page-location tracking later if needed.
+3. Push every code change to GitHub before deployment.
+4. Keep the site branding aligned with the seminary logo.
+5. Keep uploads automated: no manual publish button.
+6. Keep student uploads disabled.
+7. Upload books from the admin dashboard in batches.
+8. Watch the admin storage panel after uploads.
+9. Use the upload log to notice repeated files while keeping the admin dashboard clean.
+10. Use classification exports for library cataloging and bibliography reports.
+11. Configure Google OAuth later if Gmail sign-in is required.
+12. Add deeper PDF/EPUB page-location tracking later if needed.
+
+## AWS Hosting
+
+This repository now includes:
+
+- `Dockerfile`
+- `.dockerignore`
+- `AWS_HOSTING_GUIDE.md`
+
+Use [AWS_HOSTING_GUIDE.md](AWS_HOSTING_GUIDE.md) to deploy the app on AWS App Runner or another AWS container service. The app still uses AWS S3 for books, data records, temporary upload chunks, storage tracking, and protected file serving.
 
 ## Handover Document
 

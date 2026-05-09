@@ -280,7 +280,7 @@ class ObjectStore {
       Bucket: this.bucket,
       CORSConfiguration: {
         CORSRules: [{
-          AllowedMethods: ["PUT"],
+          AllowedMethods: ["PUT", "POST"],
           AllowedOrigins: ["https://agbslibrary.com", "https://www.agbslibrary.com", "http://localhost:3000"],
           AllowedHeaders: ["*"],
           ExposeHeaders: ["ETag"],
@@ -820,6 +820,7 @@ async function zipEntryAt(buffer, index) {
 
 async function saveUploadedResources({ files, categories, selectedCategory, autoCategorize, user, batch }) {
   const resourceRecords = [];
+  const updatedRecords = [];
   const skippedRecords = [];
   const existingResources = await db.all("resources");
   const seenHashes = new Map(existingResources.map((resource) => [resource.metadata?.hash, resource]).filter(([hash]) => Boolean(hash)));
@@ -830,19 +831,52 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       skippedRecords.push(buildSkippedUpload({ file, reason: "Only PDF and EPUB files are allowed", user, batch, hash }));
       continue;
     }
+    const category = autoCategorize ? (categoryForFile(file.filename, categories) || selectedCategory) : selectedCategory;
+    const suggested = category?.name || selectedCategory?.name || "";
     const duplicate = seenHashes.get(hash);
     if (duplicate) {
+      if (duplicate.id && category?.id && duplicate.categoryId !== category.id) {
+        const title = duplicate.title || inferTitle(duplicate.originalFilename || file.filename);
+        const author = duplicate.author || inferAuthor(duplicate.originalFilename || file.filename);
+        const classification = classifyResource({ title, originalFilename: duplicate.originalFilename || file.filename, category });
+        const updated = await db.update("resources", duplicate.id, {
+          categoryId: category.id,
+          suggestedCategory: suggested || category.name || "",
+          classification,
+          bibliography: buildBibliography({
+            title,
+            author,
+            format: duplicate.format || extension.slice(1),
+            originalFilename: duplicate.originalFilename || file.filename,
+            category,
+            classification
+          }),
+          metadata: {
+            ...(duplicate.metadata || {}),
+            hash,
+            duplicateCheck: "exact-hash",
+            recategorizedByDuplicateUpload: true,
+            recategorizedAt: new Date().toISOString(),
+            recategorizedUploadBatchId: batch.id
+          }
+        });
+        if (updated) {
+          updatedRecords.push(updated);
+          seenHashes.set(hash, updated);
+        }
+        continue;
+      }
+      const duplicateCategory = categories.find((item) => item.id === duplicate.categoryId) || null;
+      const location = displayCategoryName(duplicateCategory);
       skippedRecords.push(buildSkippedUpload({
         file,
-        reason: `Exact duplicate already exists: ${duplicate.title || duplicate.originalFilename || "same file"}`,
+        reason: `Exact duplicate already exists${location ? ` in ${location}` : ""}: ${duplicate.title || duplicate.originalFilename || "same file"}`,
         user,
         batch,
         hash
       }));
       continue;
     }
-    const category = autoCategorize ? (categoryForFile(file.filename, categories) || selectedCategory) : selectedCategory;
-    const suggested = category?.name || selectedCategory?.name || "";
     const storageName = `${crypto.randomUUID()}${extension}`;
     if (typeof db.saveFile === "function") {
       await db.saveFile(storageName, file.content, { originalFilename: file.filename, contentType: file.contentType });
@@ -874,7 +908,7 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
   }
   const saved = typeof db.insertMany === "function" ? await db.insertMany("resources", resourceRecords) : [];
   const skipped = typeof db.insertMany === "function" ? await db.insertMany("skippedUploads", skippedRecords) : [];
-  return { saved, skipped };
+  return { saved: [...updatedRecords, ...saved], skipped };
 }
 
 async function registerDirectUploadedResource({ upload, categories, selectedCategory, autoCategorize, user }) {
@@ -890,17 +924,46 @@ async function registerDirectUploadedResource({ upload, categories, selectedCate
     if (storageName && typeof db.deleteFile === "function") await db.deleteFile(storageName).catch(() => {});
     return { saved: [], skipped: [skipped] };
   }
+  const category = autoCategorize ? (categoryForFile(filename, categories) || selectedCategory) : selectedCategory;
+  const suggested = category?.name || selectedCategory?.name || "";
   const existing = await db.findOne("resources", (resource) => resource.metadata?.hash === hash);
   if (existing) {
-    const skipped = await recordSkippedUpload({ file, reason: `Exact duplicate already exists: ${existing.title || existing.originalFilename || "same file"}`, user, batch, hash });
     if (storageName && typeof db.deleteFile === "function") await db.deleteFile(storageName).catch(() => {});
+    if (category?.id && existing.categoryId !== category.id) {
+      const title = existing.title || inferTitle(existing.originalFilename || filename);
+      const author = existing.author || inferAuthor(existing.originalFilename || filename);
+      const classification = classifyResource({ title, originalFilename: existing.originalFilename || filename, category });
+      const updated = await db.update("resources", existing.id, {
+        categoryId: category.id,
+        suggestedCategory: suggested || category.name || "",
+        classification,
+        bibliography: buildBibliography({
+          title,
+          author,
+          format: existing.format || extension.slice(1),
+          originalFilename: existing.originalFilename || filename,
+          category,
+          classification
+        }),
+        metadata: {
+          ...(existing.metadata || {}),
+          hash,
+          duplicateCheck: "exact-hash",
+          recategorizedByDuplicateUpload: true,
+          recategorizedAt: new Date().toISOString(),
+          recategorizedUploadBatchId: batch.id
+        }
+      });
+      return { saved: updated ? [updated] : [], skipped: [] };
+    }
+    const existingCategory = categories.find((item) => item.id === existing.categoryId) || null;
+    const location = displayCategoryName(existingCategory);
+    const skipped = await recordSkippedUpload({ file, reason: `Exact duplicate already exists${location ? ` in ${location}` : ""}: ${existing.title || existing.originalFilename || "same file"}`, user, batch, hash });
     return { saved: [], skipped: [skipped] };
   }
   if (typeof db.fileExists === "function" && !await db.fileExists(storageName)) {
     throw new Error("Direct AWS upload did not finish. The app will retry with standard upload.");
   }
-  const category = autoCategorize ? (categoryForFile(filename, categories) || selectedCategory) : selectedCategory;
-  const suggested = category?.name || selectedCategory?.name || "";
   const title = inferTitle(filename);
   const author = inferAuthor(filename);
   const classification = classifyResource({ title, originalFilename: filename, category });
@@ -1641,8 +1704,41 @@ async function routeApi(req, res, url) {
     const extension = resourceExtensionFor({ filename, contentType: body.contentType || "" });
     const hash = String(body.hash || "");
     if (!allowedResourceExtensions.includes(extension)) return json(res, 200, { skipped: { filename, reason: "Only PDF and EPUB files are allowed" } });
+    const categories = await db.all("categories");
+    const selectedCategory = categories.find((item) => item.id === body.targetCategoryId) || categories[0];
+    const category = body.autoCategorize !== false ? (categoryForFile(filename, categories) || selectedCategory) : selectedCategory;
     const existing = await db.findOne("resources", (resource) => resource.metadata?.hash === hash);
-    if (existing) return json(res, 200, { skipped: { filename, reason: `Exact duplicate ignored: ${existing.title || existing.originalFilename || "same file"}` } });
+    if (existing) {
+      if (category?.id && existing.categoryId !== category.id) {
+        const title = existing.title || inferTitle(existing.originalFilename || filename);
+        const author = existing.author || inferAuthor(existing.originalFilename || filename);
+        const classification = classifyResource({ title, originalFilename: existing.originalFilename || filename, category });
+        const updated = await db.update("resources", existing.id, {
+          categoryId: category.id,
+          suggestedCategory: category.name || "",
+          classification,
+          bibliography: buildBibliography({
+            title,
+            author,
+            format: existing.format || extension.slice(1),
+            originalFilename: existing.originalFilename || filename,
+            category,
+            classification
+          }),
+          metadata: {
+            ...(existing.metadata || {}),
+            hash,
+            duplicateCheck: "exact-hash",
+            recategorizedByDuplicateUpload: true,
+            recategorizedAt: new Date().toISOString()
+          }
+        });
+        return json(res, 200, { resources: updated ? [publicResource(classifiedResource(updated, categories))] : [], skipped: [] });
+      }
+      const existingCategory = categories.find((item) => item.id === existing.categoryId) || null;
+      const location = displayCategoryName(existingCategory);
+      return json(res, 200, { skipped: { filename, reason: `Exact duplicate already exists${location ? ` in ${location}` : ""}: ${existing.title || existing.originalFilename || "same file"}` } });
+    }
     if (typeof db.presignedPutUrl !== "function") return json(res, 200, { direct: false });
     const storageName = `${crypto.randomUUID()}${extension}`;
     const uploadUrl = db.presignedPutUrl(storageName);

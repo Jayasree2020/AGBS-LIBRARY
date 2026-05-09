@@ -30,6 +30,8 @@ const UPLOAD_STORE_NAME = "files";
 const UPLOAD_STATE_KEY = "agbs-upload-state";
 const LARGE_UPLOAD_CHUNK_SIZE = 3 * 1024 * 1024;
 const DIRECT_FILE_UPLOAD_LIMIT = 3 * 1024 * 1024;
+const DIRECT_UPLOAD_CONCURRENCY = 4;
+let catalogWriteQueue = Promise.resolve();
 
 class ApiError extends Error {
   constructor(message, status) {
@@ -61,12 +63,45 @@ function isZipFile(file) {
   return (file.webkitRelativePath || file.name || "").toLowerCase().endsWith(".zip");
 }
 
+function isZipFilename(name) {
+  return String(name || "").toLowerCase().endsWith(".zip");
+}
+
 function uploadFilename(file) {
   return file.libraryPath || file.webkitRelativePath || file.name;
 }
 
 function isSupportedLibraryFile(name) {
   return /\.(pdf|epub)\s*\.?$/i.test(String(name || "").trim());
+}
+
+function isUploadableLibraryFile(file) {
+  return isZipFile(file) || isSupportedLibraryFile(uploadFilename(file));
+}
+
+function uploadSelectionSummary(files) {
+  const items = Array.from(files || []);
+  const supported = items.filter(isUploadableLibraryFile);
+  const unsupported = items.length - supported.length;
+  const folderPaths = new Set();
+  let pdfCount = 0;
+  let epubCount = 0;
+  let zipCount = 0;
+  let nestedFiles = 0;
+  for (const file of items) {
+    const name = uploadFilename(file);
+    if (/\.pdf\s*\.?$/i.test(name)) pdfCount += 1;
+    if (/\.epub\s*\.?$/i.test(name)) epubCount += 1;
+    if (isZipFilename(name)) zipCount += 1;
+    const parts = String(name || "").split(/[\\/]/).filter(Boolean);
+    if (parts.length > 1) folderPaths.add(parts.slice(0, -1).join("/"));
+    if (parts.length > 2) nestedFiles += 1;
+  }
+  return { total: items.length, supported, unsupported, folderCount: folderPaths.size, nestedFiles, pdfCount, epubCount, zipCount };
+}
+
+function joinLibraryPath(parent, child) {
+  return [parent, child].map((part) => String(part || "").replace(/^\/+|\/+$/g, "")).filter(Boolean).join("/");
 }
 
 function mimeForFilename(name) {
@@ -162,6 +197,60 @@ async function clearUploadQueueFiles() {
   } catch {}
 }
 
+function fileFromEntry(entry) {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+function readDirectoryEntries(reader) {
+  return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+}
+
+async function walkDroppedEntry(entry, parentPath = "") {
+  const fullPath = joinLibraryPath(parentPath, entry.name);
+  if (entry.isFile) {
+    const file = await fileFromEntry(entry);
+    file.libraryPath = fullPath;
+    return [file];
+  }
+  if (!entry.isDirectory) return [];
+  const reader = entry.createReader();
+  const files = [];
+  while (true) {
+    const entries = await readDirectoryEntries(reader);
+    if (!entries.length) break;
+    for (const child of entries) files.push(...await walkDroppedEntry(child, fullPath));
+  }
+  return files;
+}
+
+async function filesFromDrop(event) {
+  const items = Array.from(event.dataTransfer?.items || []);
+  if (items.length && items.some((item) => typeof item.webkitGetAsEntry === "function")) {
+    const files = [];
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) files.push(...await walkDroppedEntry(entry));
+    }
+    return files;
+  }
+  return Array.from(event.dataTransfer?.files || []);
+}
+
+async function walkDirectoryHandle(handle, parentPath = "") {
+  const files = [];
+  for await (const [name, child] of handle.entries()) {
+    const childPath = joinLibraryPath(parentPath, name);
+    if (child.kind === "file") {
+      const file = await child.getFile();
+      file.libraryPath = childPath;
+      files.push(file);
+    } else if (child.kind === "directory") {
+      files.push(...await walkDirectoryHandle(child, childPath));
+    }
+  }
+  return files;
+}
+
 function rememberUploadState(options, running = true) {
   localStorage.setItem(UPLOAD_STATE_KEY, JSON.stringify({ running, options, savedAt: Date.now() }));
 }
@@ -189,8 +278,8 @@ async function fileSha256(file) {
 async function duplicateSkipForFile(file, seenHashes, knownHashes) {
   const hash = await fileSha256(file);
   file.libraryHash = hash;
-  if (knownHashes.has(hash) || seenHashes.has(hash)) {
-    return { skipped: { filename: uploadFilename(file), reason: "Exact duplicate ignored", hash } };
+  if (seenHashes.has(hash)) {
+    return { skipped: { filename: uploadFilename(file), reason: "Exact duplicate in this upload ignored", hash } };
   }
   seenHashes.add(hash);
   return { hash };
@@ -224,6 +313,25 @@ function requestWithUploadProgress(url, { method = "POST", body, headers = {}, s
     signal?.addEventListener("abort", () => xhr.abort(), { once: true });
     xhr.send(body);
   });
+}
+
+async function uploadWithPresignedPost(ticket, file, fileIndex, totalFiles, signal) {
+  const form = new FormData();
+  for (const [name, value] of Object.entries(ticket.uploadPost.fields || {})) form.append(name, value);
+  form.append("file", file);
+  await requestWithUploadProgress(ticket.uploadPost.url, {
+    method: "POST",
+    body: form,
+    signal,
+    jsonResponse: false,
+    onUploadProgress: (fraction) => setUploadFileProgress(fileIndex, totalFiles, fraction, `Uploading ${uploadFilename(file)}: ${Math.round(fraction * 100)}%`)
+  });
+}
+
+function enqueueCatalogWrite(task) {
+  const run = catalogWriteQueue.then(task, task);
+  catalogWriteQueue = run.catch(() => {});
+  return run;
 }
 
 async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, label = "Uploading") {
@@ -272,15 +380,25 @@ async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress
         filename: uploadFilename(file),
         contentType: file.type || mimeForFilename(uploadFilename(file)),
         size: file.size,
-        hash
+        hash,
+        autoCategorize: options.autoCategorize,
+        targetCategoryId: options.targetCategoryId
       },
       signal,
       headers: uploadAuthHeaders()
     });
-    if (ticket.skipped) return { resources: [], skipped: [ticket.skipped], failed: [] };
+    if (Array.isArray(ticket.resources)) {
+      setUploadFileProgress(fileIndex, totalFiles, 1, `Catalog updated for ${uploadFilename(file)}`);
+      return { resources: ticket.resources, skipped: Array.isArray(ticket.skipped) ? ticket.skipped : [], failed: [] };
+    }
+    if (ticket.skipped) {
+      setUploadFileProgress(fileIndex, totalFiles, 1, `Skipped ${uploadFilename(file)}`);
+      return { resources: [], skipped: [ticket.skipped], failed: [] };
+    }
     if (ticket.direct && ticket.storageName) {
       onProgress(`Uploading ${uploadFilename(file)} directly to AWS...`);
       let uploadedDirectly = false;
+      let directError = null;
       if (ticket.uploadUrl) {
         try {
           await requestWithUploadProgress(ticket.uploadUrl, {
@@ -288,14 +406,25 @@ async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress
             body: file,
             signal,
             jsonResponse: false,
-            onUploadProgress: (fraction) => setUploadProgress(fileIndex + fraction, totalFiles, `Uploading ${uploadFilename(file)}: ${Math.round(fraction * 100)}%`)
+            onUploadProgress: (fraction) => setUploadFileProgress(fileIndex, totalFiles, fraction, `Uploading ${uploadFilename(file)}: ${Math.round(fraction * 100)}%`)
           });
           uploadedDirectly = true;
-        } catch {}
+        } catch (error) {
+          directError = error;
+        }
       }
-      if (!uploadedDirectly) throw new Error("AWS direct upload was blocked");
+      if (!uploadedDirectly && ticket.uploadPost?.url) {
+        try {
+          onProgress(`Retrying ${uploadFilename(file)} with AWS form upload...`);
+          await uploadWithPresignedPost(ticket, file, fileIndex, totalFiles, signal);
+          uploadedDirectly = true;
+        } catch (error) {
+          directError = error;
+        }
+      }
+      if (!uploadedDirectly) throw new Error(`AWS direct upload was blocked${directError?.message ? `: ${directError.message}` : ""}`);
       onProgress(`Saving ${uploadFilename(file)} in the library catalog...`);
-      return await api("/api/resources/direct-upload-complete", {
+      return await enqueueCatalogWrite(() => api("/api/resources/direct-upload-complete", {
         method: "POST",
         body: {
           storageName: ticket.storageName,
@@ -309,11 +438,14 @@ async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress
         },
         signal,
         headers: uploadAuthHeaders()
-      });
+      }));
     }
   } catch (error) {
     if (error.name === "AbortError") throw error;
-    if (file.size > DIRECT_FILE_UPLOAD_LIMIT) throw error;
+    if (file.size > DIRECT_FILE_UPLOAD_LIMIT) {
+      onProgress(`AWS direct upload failed for ${uploadFilename(file)}. Using safe chunked fallback...`);
+      return await uploadChunkedFile(file, fileIndex, totalFiles, options, onProgress, signal);
+    }
     onProgress(`Fast AWS upload unavailable for ${uploadFilename(file)}. Using standard upload...`);
   }
   const form = new FormData();
@@ -326,7 +458,7 @@ async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress
     body: form,
     signal,
     headers: uploadAuthHeaders(),
-    onUploadProgress: (fraction) => setUploadProgress(fileIndex + fraction, totalFiles, `Uploading ${uploadFilename(file)}: ${Math.round(fraction * 100)}%`)
+    onUploadProgress: (fraction) => setUploadFileProgress(fileIndex, totalFiles, fraction, `Uploading ${uploadFilename(file)}: ${Math.round(fraction * 100)}%`)
   });
 }
 
@@ -372,6 +504,7 @@ function addPendingUploadFiles(files) {
   const existing = new Set(state.pendingUploadFiles.map(uploadFileKey));
   const added = [];
   for (const file of incoming) {
+    if (!isUploadableLibraryFile(file)) continue;
     const key = uploadFileKey(file);
     if (existing.has(key)) continue;
     existing.add(key);
@@ -381,19 +514,27 @@ function addPendingUploadFiles(files) {
   return added;
 }
 
-async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, onEntrySaved, signal, seenHashes, knownHashes) {
+async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, onEntrySaved, signal, seenHashes, knownHashes, depth = 0) {
   const totals = { resources: [], skipped: [], failed: [] };
   const zipName = uploadFilename(file);
   if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
+  if (depth > 5) {
+    const failed = { filename: zipName, reason: "Nested ZIP is too deep. Please unzip this folder and upload again." };
+    totals.failed.push(failed);
+    onEntrySaved?.({ resources: [], skipped: [], failed: [failed], progressLabel: `ZIP ${zipName}: nested ZIP limit reached.`, progressCompleted: 1, progressTotal: 1 }, fileIndex + 1, totalFiles);
+    return totals;
+  }
   onProgress(`Opening ZIP ${zipName} in the browser...`);
   const JSZip = await loadJsZip();
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const entries = Object.values(zip.files).filter((entry) => !entry.dir);
-  const supportedEntries = entries.filter((entry) => isSupportedLibraryFile(entry.name));
-  const unsupportedEntries = entries.filter((entry) => !isSupportedLibraryFile(entry.name));
-  onProgress(`ZIP ${zipName}: found ${supportedEntries.length} uploadable PDF/EPUB file(s) inside ${entries.length} file(s).`);
+  const supportedEntries = entries.filter((entry) => isSupportedLibraryFile(entry.name) || isZipFilename(entry.name));
+  const unsupportedEntries = entries.filter((entry) => !isSupportedLibraryFile(entry.name) && !isZipFilename(entry.name));
+  const nestedZipCount = supportedEntries.filter((entry) => isZipFilename(entry.name)).length;
+  const bookCount = supportedEntries.length - nestedZipCount;
+  onProgress(`ZIP ${zipName}: found ${bookCount} PDF/EPUB book file(s) and ${nestedZipCount} nested ZIP file(s) inside ${entries.length} file(s).`);
   if (unsupportedEntries.length) {
-    onProgress(`ZIP ${zipName}: ignoring ${unsupportedEntries.length} non-book file(s). Only PDFs and EPUBs will be imported.`);
+    onProgress(`ZIP ${zipName}: ignoring ${unsupportedEntries.length} non-book file(s). Only PDFs, EPUBs, and ZIPs will be checked.`);
   }
   if (!supportedEntries.length) {
     const failed = { filename: zipName, reason: "No supported PDF or EPUB files were found inside this ZIP." };
@@ -410,7 +551,16 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
       const extracted = new File([blob], entry.name.split("/").pop() || entry.name, {
         type: blob.type || mimeForFilename(entry.name)
       });
-      extracted.libraryPath = entry.name;
+      extracted.libraryPath = joinLibraryPath(zipName, entry.name);
+      if (isZipFilename(entry.name)) {
+        onProgress(`Opening nested ZIP ${extracted.libraryPath}...`);
+        const nestedData = await uploadZipFile(extracted, entryIndex, supportedEntries.length, options, onProgress, onEntrySaved, signal, seenHashes, knownHashes, depth + 1);
+        totals.resources.push(...(Array.isArray(nestedData.resources) ? nestedData.resources : []));
+        totals.skipped.push(...(Array.isArray(nestedData.skipped) ? nestedData.skipped : []));
+        totals.failed.push(...(Array.isArray(nestedData.failed) ? nestedData.failed : []));
+        onEntrySaved?.({ resources: [], skipped: [], failed: [], progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.`, progressCompleted: entryIndex + 1, progressTotal: supportedEntries.length }, fileIndex + 1, totalFiles);
+        continue;
+      }
       const duplicate = await duplicateSkipForFile(extracted, seenHashes, knownHashes);
       if (duplicate.skipped) {
         totals.skipped.push(duplicate.skipped);
@@ -418,8 +568,8 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
         onEntrySaved?.({ resources: [], skipped: [duplicate.skipped], failed: [], progressLabel: `ZIP ${zipName}: ${entryIndex + 1} of ${supportedEntries.length} files checked.`, progressCompleted: entryIndex + 1, progressTotal: supportedEntries.length }, fileIndex + 1, totalFiles);
         continue;
       }
-      onProgress(`Uploading ${entry.name} from ZIP into the library...`);
-      const data = await uploadChunkedFile(extracted, entryIndex, supportedEntries.length, options, onProgress, signal);
+      onProgress(`Uploading ${entry.name} from ZIP directly to AWS...`);
+      const data = await uploadDirectFile(extracted, entryIndex, supportedEntries.length, options, onProgress, signal);
       const addedResources = Array.isArray(data.resources) ? data.resources : [];
       const skipped = Array.isArray(data.skipped) ? data.skipped : [];
       const failed = Array.isArray(data.failed) ? data.failed : [];
@@ -441,7 +591,14 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
 async function uploadChunked(files, options, onProgress, onFileSaved, signal, onTopFileDone, knownHashes = new Set()) {
   const totals = { resources: [], skipped: [], failed: [] };
   const seenHashes = new Set();
-  for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+  let nextIndex = 0;
+  let completedCount = 0;
+  const markCompleted = async (file, fileIndex) => {
+    completedCount += 1;
+    setUploadFileProgress(fileIndex, files.length, 1);
+    await onTopFileDone?.(file);
+  };
+  const processFile = async (fileIndex) => {
     if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
     const currentFile = files[fileIndex];
     try {
@@ -450,33 +607,51 @@ async function uploadChunked(files, options, onProgress, onFileSaved, signal, on
         totals.resources.push(...(Array.isArray(zipData.resources) ? zipData.resources : []));
         totals.skipped.push(...(Array.isArray(zipData.skipped) ? zipData.skipped : []));
         totals.failed.push(...(Array.isArray(zipData.failed) ? zipData.failed : []));
-        await onTopFileDone?.(currentFile);
-        continue;
+        await markCompleted(currentFile, fileIndex);
+        return;
+      }
+      if (!isSupportedLibraryFile(uploadFilename(currentFile))) {
+        const skipped = { filename: uploadFilename(currentFile), reason: "Only PDF and EPUB files are uploaded." };
+        totals.skipped.push(skipped);
+        onFileSaved?.({ resources: [], skipped: [skipped], failed: [], progressCompleted: completedCount + 1, progressTotal: files.length }, completedCount + 1, files.length);
+        await markCompleted(currentFile, fileIndex);
+        return;
       }
       const duplicate = await duplicateSkipForFile(currentFile, seenHashes, knownHashes);
       if (duplicate.skipped) {
         totals.skipped.push(duplicate.skipped);
-        onFileSaved?.({ resources: [], skipped: [duplicate.skipped], failed: [], progressCompleted: fileIndex + 1, progressTotal: files.length }, fileIndex + 1, files.length);
-        await onTopFileDone?.(currentFile);
-        continue;
+        onFileSaved?.({ resources: [], skipped: [duplicate.skipped], failed: [], progressCompleted: completedCount + 1, progressTotal: files.length }, completedCount + 1, files.length);
+        await markCompleted(currentFile, fileIndex);
+        return;
       }
-      const data = await uploadChunkedFile(currentFile, fileIndex, files.length, options, onProgress, signal);
+      const data = await uploadDirectFile(currentFile, fileIndex, files.length, options, onProgress, signal);
       const addedResources = Array.isArray(data.resources) ? data.resources : [];
       const skipped = Array.isArray(data.skipped) ? data.skipped : [];
       const failed = Array.isArray(data.failed) ? data.failed : [];
       totals.resources.push(...addedResources);
       totals.skipped.push(...skipped);
       totals.failed.push(...failed);
-      onFileSaved?.({ ...data, progressCompleted: fileIndex + 1, progressTotal: files.length }, fileIndex + 1, files.length);
-      await onTopFileDone?.(currentFile);
+      onFileSaved?.({ ...data, progressCompleted: completedCount + 1, progressTotal: files.length }, completedCount + 1, files.length);
+      await markCompleted(currentFile, fileIndex);
     } catch (error) {
       if (error.name === "AbortError") throw error;
       if (isAuthError(error)) throw error;
       const filename = uploadFilename(currentFile);
       totals.failed.push({ filename, reason: error.message });
-      onFileSaved?.({ resources: [], skipped: [], failed: [{ filename, reason: error.message }], progressCompleted: fileIndex + 1, progressTotal: files.length }, fileIndex + 1, files.length);
+      onFileSaved?.({ resources: [], skipped: [], failed: [{ filename, reason: error.message }], progressCompleted: completedCount + 1, progressTotal: files.length }, completedCount + 1, files.length);
+      await markCompleted(currentFile, fileIndex);
     }
-  }
+  };
+  const worker = async () => {
+    while (nextIndex < files.length) {
+      if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
+      const fileIndex = nextIndex;
+      nextIndex += 1;
+      await processFile(fileIndex);
+    }
+  };
+  const concurrency = Math.min(DIRECT_UPLOAD_CONCURRENCY, Math.max(1, files.length));
+  await Promise.all(Array.from({ length: concurrency }, worker));
   return totals;
 }
 
@@ -557,6 +732,17 @@ function setUploadProgress(completed = 0, total = 0, label = "") {
   bar.value = percent;
   const completedText = Number.isInteger(safeCompleted) ? String(safeCompleted) : safeCompleted.toFixed(1);
   text.textContent = label || `${percent}% complete (${completedText} of ${safeTotal} books checked)`;
+}
+
+function setUploadFileProgress(fileIndex, totalFiles, fraction, label = "") {
+  const total = Math.max(1, Number(totalFiles || 1));
+  if (!Array.isArray(state.uploadActivity.fileProgress) || state.uploadActivity.fileProgress.length !== total) {
+    state.uploadActivity.fileProgress = Array(total).fill(0);
+  }
+  const current = Number(state.uploadActivity.fileProgress[fileIndex] || 0);
+  state.uploadActivity.fileProgress[fileIndex] = Math.max(current, Math.max(0, Math.min(1, Number(fraction || 0))));
+  const completed = state.uploadActivity.fileProgress.reduce((sum, value) => sum + Number(value || 0), 0);
+  setUploadProgress(completed, total, label);
 }
 
 function addUploadActivityLog(message) {
@@ -876,6 +1062,8 @@ async function readPage() {
 function pdfControls() {
   return `
     <div class="pdf-controls">
+      <button class="secondary active" id="pdfPageMode">Page</button>
+      <button class="secondary" id="pdfScrollMode">Scroll</button>
       <button class="secondary" id="pdfPrev">Previous</button>
       <span id="pdfPageStatus">Loading...</span>
       <button class="secondary" id="pdfNext">Next</button>
@@ -889,9 +1077,10 @@ function readerSurface(resource) {
   if (resource.format === "pdf") {
     return `
       <section class="pdf-viewer" id="pdfViewer">
-        <div class="pdf-stage">
+        <div class="pdf-stage" id="pdfPageStage">
           <canvas id="pdfCanvas" aria-label="PDF page"></canvas>
         </div>
+        <div class="pdf-scroll-stage" id="pdfScrollStage" hidden></div>
       </section>
     `;
   }
@@ -901,6 +1090,8 @@ function readerSurface(resource) {
 async function setupPdfViewer(resourceId) {
   const status = document.querySelector("#pdfPageStatus");
   const canvas = document.querySelector("#pdfCanvas");
+  const pageStage = document.querySelector("#pdfPageStage");
+  const scrollStage = document.querySelector("#pdfScrollStage");
   const context = canvas.getContext("2d");
     const pdfjs = await import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs");
     pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
@@ -908,51 +1099,126 @@ async function setupPdfViewer(resourceId) {
   if (!response.ok) throw new Error("Unable to open this PDF.");
   const pdf = await pdfjs.getDocument({ data: await response.arrayBuffer() }).promise;
   let pageNumber = 1;
-  let scale = 1.2;
+  let zoom = 1;
+  let mode = "page";
   let rendering = false;
+  let scrollRendered = false;
+  let scrollRenderToken = 0;
+
+  const scaleFor = (page, container) => {
+    const available = Math.max(280, (container?.clientWidth || window.innerWidth) - 24);
+    const natural = page.getViewport({ scale: 1 });
+    const fit = Math.max(0.55, Math.min(2.2, available / natural.width));
+    return fit * zoom;
+  };
+
+  const renderCanvas = async (page, targetCanvas, container) => {
+    const viewport = page.getViewport({ scale: scaleFor(page, container) });
+    const ratio = window.devicePixelRatio || 1;
+    const targetContext = targetCanvas.getContext("2d");
+    targetCanvas.width = Math.floor(viewport.width * ratio);
+    targetCanvas.height = Math.floor(viewport.height * ratio);
+    targetCanvas.style.width = `${Math.floor(viewport.width)}px`;
+    targetCanvas.style.height = `${Math.floor(viewport.height)}px`;
+    await page.render({
+      canvasContext: targetContext,
+      viewport,
+      transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null
+    }).promise;
+  };
 
   const renderPage = async () => {
     if (rendering) return;
     rendering = true;
     status.textContent = `Page ${pageNumber} of ${pdf.numPages}`;
     const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale });
-    const ratio = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(viewport.width * ratio);
-    canvas.height = Math.floor(viewport.height * ratio);
-    canvas.style.width = `${Math.floor(viewport.width)}px`;
-    canvas.style.height = `${Math.floor(viewport.height)}px`;
-    await page.render({
-      canvasContext: context,
-      viewport,
-      transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null
-    }).promise;
+    await renderCanvas(page, canvas, pageStage);
     document.querySelector("#pdfPrev").disabled = pageNumber <= 1;
     document.querySelector("#pdfNext").disabled = pageNumber >= pdf.numPages;
     rendering = false;
   };
 
+  const updateModeButtons = () => {
+    document.querySelector("#pdfPageMode").classList.toggle("active", mode === "page");
+    document.querySelector("#pdfScrollMode").classList.toggle("active", mode === "scroll");
+    pageStage.hidden = mode !== "page";
+    scrollStage.hidden = mode !== "scroll";
+  };
+
+  const renderScroll = async (force = false) => {
+    if (scrollRendered && !force) return;
+    const token = ++scrollRenderToken;
+    scrollRendered = true;
+    scrollStage.innerHTML = "";
+    for (let index = 1; index <= pdf.numPages; index++) {
+      if (token !== scrollRenderToken) return;
+      status.textContent = `Rendering page ${index} of ${pdf.numPages}`;
+      const pageWrap = document.createElement("div");
+      pageWrap.className = "pdf-scroll-page";
+      pageWrap.dataset.page = String(index);
+      const pageCanvas = document.createElement("canvas");
+      pageCanvas.setAttribute("aria-label", `PDF page ${index}`);
+      pageWrap.appendChild(pageCanvas);
+      scrollStage.appendChild(pageWrap);
+      const page = await pdf.getPage(index);
+      await renderCanvas(page, pageCanvas, scrollStage);
+    }
+    status.textContent = `Scroll mode: ${pdf.numPages} pages`;
+  };
+
+  const setMode = async (nextMode) => {
+    mode = nextMode;
+    updateModeButtons();
+    if (mode === "scroll") await renderScroll();
+    else await renderPage();
+  };
+
+  const scrollToPage = (nextPage) => {
+    pageNumber = Math.max(1, Math.min(pdf.numPages, nextPage));
+    const target = scrollStage.querySelector(`[data-page="${pageNumber}"]`);
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+    status.textContent = `Page ${pageNumber} of ${pdf.numPages}`;
+    document.querySelector("#pdfPrev").disabled = pageNumber <= 1;
+    document.querySelector("#pdfNext").disabled = pageNumber >= pdf.numPages;
+  };
+
   document.querySelector("#pdfPrev").addEventListener("click", async () => {
     if (pageNumber > 1) {
       pageNumber--;
-      await renderPage();
+      if (mode === "scroll") scrollToPage(pageNumber);
+      else await renderPage();
     }
   });
   document.querySelector("#pdfNext").addEventListener("click", async () => {
     if (pageNumber < pdf.numPages) {
       pageNumber++;
-      await renderPage();
+      if (mode === "scroll") scrollToPage(pageNumber);
+      else await renderPage();
     }
   });
   document.querySelector("#pdfZoomOut").addEventListener("click", async () => {
-    scale = Math.max(0.6, scale - 0.2);
-    await renderPage();
+    zoom = Math.max(0.65, zoom - 0.15);
+    if (mode === "scroll") await renderScroll(true);
+    else await renderPage();
   });
   document.querySelector("#pdfZoomIn").addEventListener("click", async () => {
-    scale = Math.min(2.4, scale + 0.2);
-    await renderPage();
+    zoom = Math.min(2.4, zoom + 0.15);
+    if (mode === "scroll") await renderScroll(true);
+    else await renderPage();
+  });
+  document.querySelector("#pdfPageMode").addEventListener("click", () => setMode("page"));
+  document.querySelector("#pdfScrollMode").addEventListener("click", () => setMode("scroll"));
+  scrollStage.addEventListener("scroll", () => {
+    if (mode !== "scroll") return;
+    const pages = Array.from(scrollStage.querySelectorAll(".pdf-scroll-page"));
+    const current = pages.find((page) => page.getBoundingClientRect().bottom > 120);
+    if (current?.dataset.page) pageNumber = Number(current.dataset.page);
+    status.textContent = `Page ${pageNumber} of ${pdf.numPages}`;
+    document.querySelector("#pdfPrev").disabled = pageNumber <= 1;
+    document.querySelector("#pdfNext").disabled = pageNumber >= pdf.numPages;
   });
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+  scrollStage.addEventListener("contextmenu", (event) => event.preventDefault());
   await renderPage();
 }
 
@@ -990,6 +1256,11 @@ async function adminPage() {
           <form class="form" id="uploadForm">
             <label>Choose files <input type="file" id="resourceFiles" name="files" accept=".pdf,.epub,.zip" multiple></label>
             <label>Choose folder <input type="file" id="resourceFolder" name="folder" webkitdirectory directory multiple></label>
+            <button type="button" class="secondary" id="openFolderTree">Open folder tree</button>
+            <div class="folder-drop" id="folderDropZone" role="button" tabindex="0">
+              <strong>Drop folders, subfolders, ZIPs, PDFs, or EPUBs here</strong>
+              <span>The app will scan every subfolder it receives.</span>
+            </div>
             <p class="subtle upload-help">Only PDF and EPUB books are allowed. ZIP folders are supported: choose a .zip file and the app will open it, find PDFs/EPUBs inside its folders, and upload each one as a separate library book.</p>
             <label>Upload handling
               <select name="autoCategorize" id="autoCategorize">
@@ -1178,6 +1449,8 @@ function reportTable() {
 function wireAdmin() {
   const resourceInput = document.querySelector("#resourceFiles");
   const folderInput = document.querySelector("#resourceFolder");
+  const openFolderTreeButton = document.querySelector("#openFolderTree");
+  const folderDropZone = document.querySelector("#folderDropZone");
   const uploadSelection = document.querySelector("#uploadSelection");
   const uploadStatus = document.querySelector("#uploadStatus");
   const uploadLog = document.querySelector("#uploadLog");
@@ -1194,7 +1467,10 @@ function wireAdmin() {
     const totalSize = files.reduce((sum, file) => sum + file.size, 0);
     const hasZip = files.some(isZipFile);
     const mb = (totalSize / 1024 / 1024).toFixed(2);
-    uploadSelection.textContent = files.length ? `${files.length} file(s) selected, ${mb} MB total.` : "No files selected.";
+    const summary = uploadSelectionSummary(files);
+    uploadSelection.textContent = files.length
+      ? `${summary.supported.length} uploadable book file(s) selected, ${mb} MB total. ${summary.folderCount ? `${summary.folderCount} folder path(s) detected.` : ""}`
+      : "No files selected.";
     const message = hasZip
       ? "ZIP mode: the app will open the ZIP folder and upload each PDF/EPUB inside as a separate library book. JPG/image files will be ignored."
       : totalSize > 4 * 1024 * 1024
@@ -1220,23 +1496,108 @@ function wireAdmin() {
     }
   })();
   resourceInput.addEventListener("change", () => {
+    const summary = uploadSelectionSummary(resourceInput.files);
     const added = addPendingUploadFiles(resourceInput.files);
     resourceInput.value = "";
     updateUploadSelection();
     if (added.length) {
       addUploadLog(`Added ${added.length} selected file(s) to the upload queue.`);
+      addUploadLog(`Selection scan found ${summary.pdfCount} PDF, ${summary.epubCount} EPUB, and ${summary.zipCount} ZIP file(s).`);
+      if (summary.unsupported) addUploadLog(`Ignored ${summary.unsupported} non-book file(s). Only PDF, EPUB, and ZIP are accepted.`);
       saveUploadQueueFiles(added).catch(() => addUploadLog("The selected upload queue could not be remembered after refresh."));
+    } else if (summary.total) {
+      addUploadLog("No PDF, EPUB, or ZIP files were found in that selection.");
     }
   });
   folderInput.addEventListener("change", () => {
+    const summary = uploadSelectionSummary(folderInput.files);
+    const firstFile = Array.from(folderInput.files || [])[0];
+    const hasFolderPaths = Boolean(firstFile?.webkitRelativePath);
     const added = addPendingUploadFiles(folderInput.files);
     folderInput.value = "";
     updateUploadSelection();
+    if (summary.total && !hasFolderPaths) {
+      addUploadLog("This browser did not send subfolder paths. Use Chrome/Edge folder upload or upload a ZIP to include every subfolder.");
+    }
     if (added.length) {
-      addUploadLog(`Added ${added.length} file(s) from folder selection to the upload queue.`);
+      addUploadLog(`Added ${added.length} book file(s) from folder selection to the upload queue.`);
+      addUploadLog(`Folder scan found ${summary.supported.length} uploadable book file(s) inside ${summary.folderCount || 1} folder path(s). ${summary.nestedFiles ? `${summary.nestedFiles} file(s) were inside subfolders.` : "No subfolder files were detected."}`);
+      addUploadLog(`Folder scan includes ${summary.pdfCount} PDF, ${summary.epubCount} EPUB, and ${summary.zipCount} ZIP file(s). ZIP files will be opened and checked for more books.`);
+      if (summary.unsupported) addUploadLog(`Ignored ${summary.unsupported} non-book file(s). Only PDF, EPUB, and ZIP are accepted.`);
       saveUploadQueueFiles(added).catch(() => addUploadLog("The selected upload queue could not be remembered after refresh."));
+    } else if (summary.total) {
+      addUploadLog("No PDF, EPUB, or ZIP files were found in that folder selection.");
+    } else {
+      addUploadLog("No files were received from the folder picker. Use Open folder tree, drag the folder into the drop box, or upload a ZIP.");
     }
   });
+  openFolderTreeButton?.addEventListener("click", async () => {
+    if (!window.showDirectoryPicker) {
+      setUploadActivityStatus("This browser cannot open a folder tree directly. Use Chrome/Edge, drag the folder into the drop box, or upload a ZIP.");
+      addUploadLog("Open folder tree is not supported in this browser.");
+      return;
+    }
+    try {
+      setUploadActivityStatus("Opening folder tree...");
+      const handle = await window.showDirectoryPicker({ mode: "read" });
+      setUploadActivityStatus("Scanning every subfolder...");
+      const files = await walkDirectoryHandle(handle, handle.name);
+      const summary = uploadSelectionSummary(files);
+      const added = addPendingUploadFiles(files);
+      updateUploadSelection();
+      if (added.length) {
+        addUploadLog(`Added ${added.length} book file(s) from the folder tree.`);
+        addUploadLog(`Folder tree scan found ${summary.pdfCount} PDF, ${summary.epubCount} EPUB, and ${summary.zipCount} ZIP file(s) inside ${summary.folderCount || 1} folder path(s). ${summary.nestedFiles ? `${summary.nestedFiles} file(s) were inside subfolders.` : "No subfolder files were detected."}`);
+        if (summary.unsupported) addUploadLog(`Ignored ${summary.unsupported} non-book file(s). Only PDF, EPUB, and ZIP are accepted.`);
+        await saveUploadQueueFiles(added).catch(() => addUploadLog("The selected upload queue could not be remembered after refresh."));
+        setUploadActivityStatus("Folder tree scan complete. Ready to upload.");
+      } else {
+        setUploadActivityStatus("No PDF, EPUB, or ZIP files were found in that folder tree.");
+        addUploadLog("No PDF, EPUB, or ZIP files were found in that folder tree.");
+      }
+    } catch (error) {
+      if (error.name === "AbortError") {
+        setUploadActivityStatus("Folder selection cancelled.");
+        return;
+      }
+      setUploadActivityStatus("Folder tree could not be scanned. Try dragging the folder or upload a ZIP.");
+      addUploadLog(`Folder tree scan failed: ${error.message}`);
+    }
+  });
+  if (folderDropZone) {
+    for (const eventName of ["dragenter", "dragover"]) {
+      folderDropZone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        folderDropZone.classList.add("active");
+      });
+    }
+    for (const eventName of ["dragleave", "drop"]) {
+      folderDropZone.addEventListener(eventName, () => folderDropZone.classList.remove("active"));
+    }
+    folderDropZone.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      setUploadActivityStatus("Scanning dropped folders and subfolders...");
+      try {
+        const droppedFiles = await filesFromDrop(event);
+        const summary = uploadSelectionSummary(droppedFiles);
+        const added = addPendingUploadFiles(droppedFiles);
+        updateUploadSelection();
+        if (added.length) {
+          addUploadLog(`Added ${added.length} book file(s) from dropped folder/file selection.`);
+          addUploadLog(`Dropped scan found ${summary.pdfCount} PDF, ${summary.epubCount} EPUB, and ${summary.zipCount} ZIP file(s) inside ${summary.folderCount || 1} folder path(s). ${summary.nestedFiles ? `${summary.nestedFiles} file(s) were inside subfolders.` : "No subfolder files were detected."}`);
+          if (summary.unsupported) addUploadLog(`Ignored ${summary.unsupported} non-book file(s). Only PDF, EPUB, and ZIP are accepted.`);
+          saveUploadQueueFiles(added).catch(() => addUploadLog("The dropped upload queue could not be remembered after refresh."));
+          setUploadActivityStatus("Folder scan complete. Ready to upload.");
+        } else {
+          setUploadActivityStatus("No PDF, EPUB, or ZIP files were found in the dropped folder.");
+          addUploadLog("No PDF, EPUB, or ZIP files were found in the dropped folder.");
+        }
+      } catch (error) {
+        setUploadActivityStatus("This browser could not scan the dropped folder. Please use Chrome/Edge or upload a ZIP.");
+        addUploadLog(`Folder drop failed: ${error.message}`);
+      }
+    });
+  }
   clearUploadButton.addEventListener("click", async () => {
     if (uploadController) return;
     state.pendingUploadFiles = [];
@@ -1295,7 +1656,7 @@ function wireAdmin() {
       setUploadProgress(0, files.length);
       setUploadActivityStatus("Checking duplicates before upload...");
       const knownHashes = await loadResourceHashes().catch(() => state.resourceHashes || new Set());
-      addUploadLog(`Duplicate check loaded. Uploading only new PDF/EPUB files.`);
+      addUploadLog(`Duplicate check loaded. Uploading directly to AWS with up to ${DIRECT_UPLOAD_CONCURRENCY} files at a time.`);
       let data;
       const streamingUpload = true;
       if (streamingUpload) {

@@ -1,0 +1,8 @@
+.env
+.vercel
+.tools
+data
+storage
+node_modules
+npm-debug.log*
+*.local
