@@ -1,0 +1,95 @@
+name: Deploy to AWS Elastic Beanstalk
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: elastic-beanstalk-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      EB_APPLICATION_NAME: agbs-library
+      EB_ENVIRONMENT_NAME: Agbs-library-aws-1-env
+      EB_ARTIFACT_BUCKET: elasticbeanstalk-us-east-1-567681717467
+      EB_ARTIFACT_PREFIX: agbs-library/github-actions
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Check server syntax
+        run: |
+          node --check server.js
+          node --check public/app.js
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::567681717467:role/agbs-github-elasticbeanstalk-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create Elastic Beanstalk source bundle
+        run: |
+          mkdir -p deploy
+          zip -r "deploy/agbs-library-${GITHUB_SHA}.zip" \
+            server.js \
+            package.json \
+            package-lock.json \
+            Procfile \
+            public \
+            api \
+            README.md \
+            AWS_HOSTING_GUIDE.md \
+            AGBS_LIBRARY_PROJECT_DOCUMENT.md \
+            .env.example
+
+      - name: Upload source bundle to S3
+        run: |
+          aws s3 cp "deploy/agbs-library-${GITHUB_SHA}.zip" \
+            "s3://${EB_ARTIFACT_BUCKET}/${EB_ARTIFACT_PREFIX}/agbs-library-${GITHUB_SHA}.zip"
+
+      - name: Create Elastic Beanstalk application version
+        run: |
+          aws elasticbeanstalk create-application-version \
+            --application-name "${EB_APPLICATION_NAME}" \
+            --version-label "github-${GITHUB_SHA}" \
+            --description "GitHub Actions deploy ${GITHUB_SHA}" \
+            --source-bundle "S3Bucket=${EB_ARTIFACT_BUCKET},S3Key=${EB_ARTIFACT_PREFIX}/agbs-library-${GITHUB_SHA}.zip"
+
+      - name: Deploy application version
+        run: |
+          aws elasticbeanstalk update-environment \
+            --environment-name "${EB_ENVIRONMENT_NAME}" \
+            --version-label "github-${GITHUB_SHA}"
+
+      - name: Wait for deployment
+        run: |
+          aws elasticbeanstalk wait environment-updated \
+            --environment-names "${EB_ENVIRONMENT_NAME}"
+
+      - name: Show environment status
+        run: |
+          aws elasticbeanstalk describe-environments \
+            --environment-names "${EB_ENVIRONMENT_NAME}" \
+            --query "Environments[0].{Status:Status,Health:Health,Version:VersionLabel,CNAME:CNAME}" \
+            --output table

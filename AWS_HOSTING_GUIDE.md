@@ -42,6 +42,36 @@ https://github.com/Jayasree2020/AGBS-LIBRARY
 
 Do not edit production files manually in AWS. Make changes in this repository, create a new Elastic Beanstalk application version ZIP, then deploy that version.
 
+## Automatic GitHub Deployment
+
+GitHub Actions deploys `main` to Elastic Beanstalk automatically.
+
+Workflow file:
+
+```text
+.github/workflows/deploy-elastic-beanstalk.yml
+```
+
+Deployment role:
+
+```text
+arn:aws:iam::567681717467:role/agbs-github-elasticbeanstalk-deploy
+```
+
+The workflow uses GitHub OIDC to assume the AWS role, builds a clean source ZIP, uploads it to the Elastic Beanstalk S3 artifact bucket, creates an application version, and updates:
+
+```text
+Application: agbs-library
+Environment: Agbs-library-aws-1-env
+Region: us-east-1
+```
+
+After this workflow is active, normal changes should follow this path:
+
+```text
+local code change -> GitHub main -> GitHub Actions -> Elastic Beanstalk
+```
+
 ## Files Used By AWS
 
 - `server.js`: Node.js application server.
