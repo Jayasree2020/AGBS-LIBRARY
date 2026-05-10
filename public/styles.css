@@ -274,12 +274,34 @@ label {
   background: #fff0c8;
 }
 
+.storage-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.storage-panel-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.storage-panel h3 {
+  margin: 0 0 4px;
+  color: var(--brand-strong);
+}
+
 .storage-meter {
-  height: 10px;
+  height: 12px;
   overflow: hidden;
   background: #f2dfbd;
   border-radius: 999px;
-  margin: -10px 0 10px;
+  margin: 0;
 }
 
 .storage-meter span {
@@ -287,6 +309,13 @@ label {
   height: 100%;
   min-width: 2px;
   background: linear-gradient(90deg, var(--brand), var(--flame), var(--gold));
+}
+
+.storage-meter-label {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .toolbar {

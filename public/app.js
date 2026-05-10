@@ -1347,24 +1347,73 @@ function formatGb(value) {
   return `${(number * 1000).toFixed(1)} MB`;
 }
 
+function formatUsd(value) {
+  const number = Number(value || 0);
+  return `$${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 function storageUsageSummary() {
   const usage = state.storageUsage || {};
-  const remaining = usage.remainingGb === null || usage.remainingGb === undefined ? "Set budget" : formatGb(usage.remainingGb);
+  const budgetGb = Number(usage.budgetGb || 0);
+  const usedGb = Number(usage.usedGb || 0);
+  const bookGb = Number(usage.bookGb || 0);
+  const remainingGb = usage.remainingGb === null || usage.remainingGb === undefined ? null : Number(usage.remainingGb || 0);
+  const usagePercent = usage.usagePercent === null || usage.usagePercent === undefined ? 0 : Math.max(0, Math.min(100, Number(usage.usagePercent || 0)));
+  const planMonths = Number(usage.planMonths || 12);
+  const remaining = remainingGb === null ? "Set budget" : formatGb(remainingGb);
   const runway = usage.runwayMonths === null || usage.runwayMonths === undefined
-    ? `${Number(usage.planMonths || 12)}+ months`
+    ? `${planMonths}+ months`
     : `${Math.max(1, Math.floor(Number(usage.runwayMonths || 0))).toLocaleString()} months`;
+  const status = budgetGb && usedGb <= budgetGb ? `On track for ${planMonths} months` : "Over planned storage budget";
   return `
-    <section class="stats-grid storage-grid storage-simple">
+    <section class="storage-panel">
+      <div class="storage-panel-head">
+        <div>
+          <h3>12-month AWS storage runway</h3>
+          <p class="subtle">Based on the configured AWS credit/storage plan. This refreshes after uploads and whenever this dashboard opens.</p>
+        </div>
+        <button class="secondary" type="button" id="refreshStorageUsage">Refresh</button>
+      </div>
+      <div class="storage-meter" aria-label="Storage used">
+        <span style="width: ${usagePercent.toFixed(2)}%"></span>
+      </div>
+      <p class="storage-meter-label">${usagePercent.toFixed(2)}% used of the 12-month plan</p>
+    </section>
+    <section class="stats-grid storage-grid">
       <article class="stat-card stat-total">
-        <span>Total storage left</span>
+        <span>Total usable for ${planMonths} months</span>
+        <strong>${formatGb(budgetGb)}</strong>
+      </article>
+      <article class="stat-card stat-total">
+        <span>Storage left</span>
         <strong>${remaining}</strong>
       </article>
       <article class="stat-card">
-        <span>Month runway</span>
-        <strong>${runway}</strong>
+        <span>Used now</span>
+        <strong>${formatGb(usedGb)}</strong>
+      </article>
+      <article class="stat-card">
+        <span>Books stored</span>
+        <strong>${formatGb(bookGb)}</strong>
+      </article>
+      <article class="stat-card">
+        <span>Current monthly storage cost</span>
+        <strong>${usage.monthlyStorageCostUsd === null || usage.monthlyStorageCostUsd === undefined ? "-" : formatUsd(usage.monthlyStorageCostUsd)}</strong>
+      </article>
+      <article class="stat-card">
+        <span>12-month cost at current use</span>
+        <strong>${usage.twelveMonthStorageCostUsd === null || usage.twelveMonthStorageCostUsd === undefined ? "-" : formatUsd(usage.twelveMonthStorageCostUsd)}</strong>
+      </article>
+      <article class="stat-card">
+        <span>Credit remaining at current use</span>
+        <strong>${usage.remainingCreditUsd === null || usage.remainingCreditUsd === undefined ? "-" : formatUsd(usage.remainingCreditUsd)}</strong>
+      </article>
+      <article class="stat-card">
+        <span>Status</span>
+        <strong>${status}</strong>
       </article>
     </section>
-    <p class="subtle">Plan: ${formatGb(usage.budgetGb)} for ${Number(usage.planMonths || 12)} months. This reduces automatically as files are uploaded. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
+    <p class="subtle">Credit model: ${formatUsd(usage.creditUsd)} over ${planMonths} months at about ${formatUsd(usage.storageUsdPerGbMonth)} per GB-month. Estimated credit-only capacity: ${formatGb(usage.creditCapacityGb)}. Active dashboard cap: ${formatGb(budgetGb)}. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
   `;
 }
 
@@ -1451,6 +1500,7 @@ function wireAdmin() {
   const folderInput = document.querySelector("#resourceFolder");
   const openFolderTreeButton = document.querySelector("#openFolderTree");
   const folderDropZone = document.querySelector("#folderDropZone");
+  const refreshStorageButton = document.querySelector("#refreshStorageUsage");
   const uploadSelection = document.querySelector("#uploadSelection");
   const uploadStatus = document.querySelector("#uploadStatus");
   const uploadLog = document.querySelector("#uploadLog");
@@ -1461,6 +1511,19 @@ function wireAdmin() {
   const addUploadLog = (message) => {
     addUploadActivityLog(message);
   };
+  refreshStorageButton?.addEventListener("click", async () => {
+    refreshStorageButton.disabled = true;
+    refreshStorageButton.textContent = "Refreshing...";
+    try {
+      await refreshStorageUsage();
+    } finally {
+      const nextButton = document.querySelector("#refreshStorageUsage");
+      if (nextButton) {
+        nextButton.disabled = false;
+        nextButton.textContent = "Refresh";
+      }
+    }
+  });
   const selectedUploadFiles = () => state.pendingUploadFiles;
   const updateUploadSelection = () => {
     const files = selectedUploadFiles();

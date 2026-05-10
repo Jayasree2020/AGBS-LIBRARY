@@ -2,9 +2,9 @@
 
 AGBS LIBRARY is a secure digital library portal for off-campus seminary students. It supports controlled student access to PDF and EPUB study resources, admin-managed uploads, department-based categorization, AWS S3 storage, and reading activity tracking.
 
-Live HTTP site:
+Live site:
 
-- [http://agbslibrary.com](http://agbslibrary.com)
+- [https://www.agbslibrary.com](https://www.agbslibrary.com)
 - [http://www.agbslibrary.com](http://www.agbslibrary.com)
 
 Temporary AWS environment URL:
@@ -19,14 +19,14 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 - GitHub remains the source of truth for all code changes.
 - Permanent file and data storage is AWS S3.
 - Hostinger DNS points the public domain to the AWS Elastic Beanstalk environment.
-- HTTP is live on the public domain. HTTPS/SSL is the remaining setup step and requires an AWS Certificate Manager certificate plus a load-balanced Elastic Beanstalk environment.
-- HTTPS can time out until the AWS certificate and HTTPS listener are attached.
+- HTTPS is live on `www.agbslibrary.com` through AWS Certificate Manager and an Elastic Beanstalk application load balancer.
+- The root domain `agbslibrary.com` depends on DNS support for root alias/CNAME records. The official production URL is `https://www.agbslibrary.com`.
 - The app uses the Amazing Grace Biblical Seminary logo and a matching red, gold, flame-orange, and warm cream color system.
 - Vercel, Cloudflare R2, and MongoDB are not part of the current production setup.
 - Uploaded books are stored in AWS as complete files, not visible upload parts.
 - Admin uploads are automatically published into the library.
 - Valid PDF/EPUB files are added unless the exact same file already exists.
-- The admin dashboard shows total storage left and estimated month runway for a 12-month AWS storage plan.
+- The admin dashboard shows total usable storage, current used storage, remaining storage, and 12-month AWS credit runway.
 
 ## What The App Does
 
@@ -235,6 +235,8 @@ AWS_S3_BUCKET
 AWS_S3_PREFIX
 AWS_STORAGE_BUDGET_GB
 AWS_STORAGE_PLAN_MONTHS
+AWS_STORAGE_CREDIT_USD
+AWS_S3_STORAGE_USD_PER_GB_MONTH
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 GOOGLE_REDIRECT_URI
@@ -264,17 +266,18 @@ On this Windows workspace, `START-AGBS-LIBRARY.cmd` can also start the local ser
 2. Use AWS S3 for all permanent files and JSON records.
 3. Push every code change to GitHub before deployment.
 4. Deploy updated Elastic Beanstalk ZIP versions from the repository code.
-5. Finish AWS HTTPS by issuing an ACM certificate for `agbslibrary.com` and `www.agbslibrary.com`.
-6. Move the Elastic Beanstalk environment from single-instance to load-balanced before attaching the HTTPS listener.
+5. Keep AWS HTTPS active on `www.agbslibrary.com`.
+6. Keep the Elastic Beanstalk environment load-balanced for SSL.
 7. Keep the site branding aligned with the seminary logo.
-8. Keep uploads automated: no manual publish button.
-9. Keep student uploads disabled.
-10. Upload books from the admin dashboard in batches.
-11. Watch the admin storage panel after uploads.
-12. Use the upload log to notice repeated files while keeping the admin dashboard clean.
-13. Use classification exports for library cataloging and bibliography reports.
-14. Configure Google OAuth later if Gmail sign-in is required.
-15. Add deeper PDF/EPUB page-location tracking later if needed.
+8. Show AWS storage capacity, real-time usage, remaining TB/GB, and 12-month credit runway in the admin dashboard.
+9. Keep uploads automated: no manual publish button.
+10. Keep student uploads disabled.
+11. Upload books from the admin dashboard in batches.
+12. Watch the admin storage panel after uploads.
+13. Use the upload log to notice repeated files while keeping the admin dashboard clean.
+14. Use classification exports for library cataloging and bibliography reports.
+15. Configure Google OAuth later if Gmail sign-in is required.
+16. Add deeper PDF/EPUB page-location tracking later if needed.
 
 ## AWS Hosting
 
@@ -291,8 +294,8 @@ Elastic Beanstalk currently runs the Node.js app on port `8080` behind nginx. Th
 
 Current public domain status:
 
-- HTTP: active on `agbslibrary.com` and `www.agbslibrary.com`.
-- HTTPS: pending AWS Certificate Manager validation and load balancer HTTPS listener setup.
+- HTTPS: active on `www.agbslibrary.com`.
+- Root domain: use DNS root alias/CNAME support or Route 53 if `agbslibrary.com` must resolve without `www`.
 
 ## Handover Document
 

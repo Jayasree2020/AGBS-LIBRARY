@@ -33,6 +33,8 @@ const AWS_S3_BUCKET = process.env.AWS_S3_BUCKET || "";
 const AWS_S3_PREFIX = (process.env.AWS_S3_PREFIX || "agbs-library").replace(/^\/+|\/+$/g, "");
 const AWS_STORAGE_BUDGET_GB = Number(process.env.AWS_STORAGE_BUDGET_GB || 3000);
 const AWS_STORAGE_PLAN_MONTHS = Number(process.env.AWS_STORAGE_PLAN_MONTHS || 12);
+const AWS_STORAGE_CREDIT_USD = Number(process.env.AWS_STORAGE_CREDIT_USD || 1000);
+const AWS_S3_STORAGE_USD_PER_GB_MONTH = Number(process.env.AWS_S3_STORAGE_USD_PER_GB_MONTH || 0.023);
 const RUNTIME_DIR = process.env.VERCEL ? path.join(os.tmpdir(), "agbs-library") : __dirname;
 const DATA_DIR = path.join(RUNTIME_DIR, "data");
 const STORAGE_DIR = path.join(RUNTIME_DIR, "storage");
@@ -1667,17 +1669,31 @@ async function routeApi(req, res, url) {
     const usage = typeof db.storageUsage === "function" ? await db.storageUsage() : {};
     const usedGb = Number(usage.totalBytes || 0) / 1_000_000_000;
     const bookGb = Number(usage.bookBytes || 0) / 1_000_000_000;
-    const budgetGb = Number.isFinite(AWS_STORAGE_BUDGET_GB) && AWS_STORAGE_BUDGET_GB > 0 ? AWS_STORAGE_BUDGET_GB : 0;
+    const explicitBudgetGb = Number.isFinite(AWS_STORAGE_BUDGET_GB) && AWS_STORAGE_BUDGET_GB > 0 ? AWS_STORAGE_BUDGET_GB : 0;
     const planMonths = Number.isFinite(AWS_STORAGE_PLAN_MONTHS) && AWS_STORAGE_PLAN_MONTHS > 0 ? AWS_STORAGE_PLAN_MONTHS : 12;
-    const runwayBaseGb = usedGb >= 0.01 ? usedGb : 0;
-    const runwayMonths = budgetGb && runwayBaseGb ? (budgetGb * planMonths) / runwayBaseGb : null;
+    const creditUsd = Number.isFinite(AWS_STORAGE_CREDIT_USD) && AWS_STORAGE_CREDIT_USD > 0 ? AWS_STORAGE_CREDIT_USD : 0;
+    const storageUsdPerGbMonth = Number.isFinite(AWS_S3_STORAGE_USD_PER_GB_MONTH) && AWS_S3_STORAGE_USD_PER_GB_MONTH > 0 ? AWS_S3_STORAGE_USD_PER_GB_MONTH : 0;
+    const creditCapacityGb = creditUsd && storageUsdPerGbMonth ? creditUsd / storageUsdPerGbMonth / planMonths : 0;
+    const budgetGb = explicitBudgetGb || creditCapacityGb;
+    const remainingGb = budgetGb ? Math.max(0, budgetGb - usedGb) : null;
+    const monthlyStorageCostUsd = storageUsdPerGbMonth ? usedGb * storageUsdPerGbMonth : null;
+    const twelveMonthStorageCostUsd = monthlyStorageCostUsd === null ? null : monthlyStorageCostUsd * planMonths;
+    const remainingCreditUsd = creditUsd && twelveMonthStorageCostUsd !== null ? Math.max(0, creditUsd - twelveMonthStorageCostUsd) : null;
+    const runwayMonths = monthlyStorageCostUsd && creditUsd ? creditUsd / monthlyStorageCostUsd : null;
     return json(res, 200, {
       ...usage,
       usedGb,
       bookGb,
       budgetGb,
+      explicitBudgetGb,
+      creditCapacityGb,
+      creditUsd,
+      storageUsdPerGbMonth,
       planMonths,
-      remainingGb: budgetGb ? Math.max(0, budgetGb - usedGb) : null,
+      remainingGb,
+      monthlyStorageCostUsd,
+      twelveMonthStorageCostUsd,
+      remainingCreditUsd,
       runwayMonths,
       usagePercent: budgetGb ? Math.min(100, (usedGb / budgetGb) * 100) : null,
       updatedAt: new Date().toISOString()

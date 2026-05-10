@@ -24,13 +24,13 @@ Production hosting is now AWS Elastic Beanstalk. Vercel is no longer the product
 
 ## Live URLs
 
-HTTP is active:
+Production HTTPS is active:
 
-- `http://agbslibrary.com`
+- `https://www.agbslibrary.com`
 - `http://www.agbslibrary.com`
 - `http://Agbs-library-aws-1-env.eba-8uziqsiu.us-east-1.elasticbeanstalk.com`
 
-HTTPS is pending. Until AWS Certificate Manager and an HTTPS listener are configured, `https://` may time out.
+The root domain `agbslibrary.com` requires DNS root alias/CNAME support or Route 53 if it must resolve without `www`.
 
 ## GitHub Rule
 
@@ -59,12 +59,12 @@ Current environment:
 Application: agbs-library
 Environment: Agbs-library-aws-1-env
 Platform: Node.js 22 running on 64bit Amazon Linux 2023
-Environment type: Single instance
+Environment type: Load balanced
 Proxy: nginx
 App port: 8080
 ```
 
-The current single-instance setup is enough for HTTP testing and admin work. AWS-only HTTPS requires moving the environment to a load-balanced configuration so an ACM certificate can be attached to a port 443 listener.
+The load-balanced setup is required for AWS-only HTTPS. The load balancer has HTTP port `80` and HTTPS port `443` listeners, with the ACM certificate attached to the HTTPS listener.
 
 ## Required Environment Variables
 
@@ -84,6 +84,8 @@ AWS_S3_BUCKET=agbs-library-books-india-567681717467-us-east-1-an
 AWS_S3_PREFIX=agbs-library
 AWS_STORAGE_BUDGET_GB=3000
 AWS_STORAGE_PLAN_MONTHS=12
+AWS_STORAGE_CREDIT_USD=1000
+AWS_S3_STORAGE_USD_PER_GB_MONTH=0.023
 GOOGLE_CLIENT_ID=<optional>
 GOOGLE_CLIENT_SECRET=<optional>
 GOOGLE_REDIRECT_URI=https://www.agbslibrary.com/auth/google/callback
@@ -96,13 +98,16 @@ Never commit real secrets to GitHub.
 Hostinger DNS should point to AWS:
 
 ```text
-A      @      34.192.31.166
 CNAME  www    Agbs-library-aws-1-env.eba-8uziqsiu.us-east-1.elasticbeanstalk.com
 ```
 
+The root `@` record should use Hostinger root CNAME/ALIAS support if available. If not available, use Route 53 Alias for the root domain or keep `https://www.agbslibrary.com` as the official URL.
+
 No Vercel DNS records should remain.
 
-## AWS SSL/HTTPS Plan
+## AWS SSL/HTTPS
+
+Completed setup:
 
 1. In AWS Certificate Manager, request a public certificate for:
    - `agbslibrary.com`
@@ -114,7 +119,6 @@ No Vercel DNS records should remain.
 6. Add an HTTPS listener on port `443`.
 7. Attach the issued ACM certificate.
 8. Test:
-   - `https://agbslibrary.com`
    - `https://www.agbslibrary.com`
 
 ## S3 CORS
@@ -151,8 +155,8 @@ The S3 bucket must allow browser uploads from the live domain:
 ## Verification Checklist
 
 - Home page opens from the Elastic Beanstalk URL.
-- `http://agbslibrary.com` opens the app.
 - `http://www.agbslibrary.com` opens the app.
+- `https://www.agbslibrary.com` opens the app.
 - `/api/config` reports `storageProvider: "aws-s3"`.
 - Admin login works.
 - Admin can upload one PDF.
@@ -161,6 +165,7 @@ The S3 bucket must allow browser uploads from the live domain:
 - Book appears in library search.
 - Student can open the protected reader.
 - Storage panel updates after upload.
+- Storage panel shows total usable storage, used storage, remaining storage, and 12-month AWS credit runway.
 - GitHub contains the deployed code.
 
 ## Security Cleanup
