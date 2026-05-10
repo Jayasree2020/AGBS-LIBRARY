@@ -1410,7 +1410,7 @@ function storageUsageSummary() {
         <strong>${status}</strong>
       </article>
     </section>
-    <p class="subtle">Credit model: ${formatUsd(usage.creditUsd)} over ${planMonths} months at about ${formatUsd(usage.storageUsdPerGbMonth)} per GB-month. Estimated credit-only capacity: ${formatGb(usage.creditCapacityGb)}. Active dashboard cap: ${formatGb(budgetGb)}. The dashboard is capped to a ${planMonths}-month planning window, not lifetime months. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
+    <p class="subtle">Credit model: ${formatUsd(usage.creditUsd)} over ${planMonths} months at about ${formatUsd(usage.storageUsdPerGbMonth)} per GB-month. Estimated credit-only capacity: ${formatGb(usage.creditCapacityGb)}. Active dashboard cap: ${formatGb(budgetGb)}. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
   `;
 }
 
