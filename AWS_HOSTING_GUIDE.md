@@ -165,7 +165,7 @@ The S3 bucket must allow browser uploads from the live domain:
 - Book appears in library search.
 - Student can open the protected reader.
 - Storage panel updates after upload.
-- Storage panel shows total usable storage, used storage, remaining storage, and 12-month AWS credit runway.
+- Storage panel shows total usable storage, used storage, remaining storage, and 12-month AWS credit coverage.
 - GitHub contains the deployed code.
 
 ## Security Cleanup

@@ -1679,7 +1679,7 @@ async function routeApi(req, res, url) {
     const monthlyStorageCostUsd = storageUsdPerGbMonth ? usedGb * storageUsdPerGbMonth : null;
     const twelveMonthStorageCostUsd = monthlyStorageCostUsd === null ? null : monthlyStorageCostUsd * planMonths;
     const remainingCreditUsd = creditUsd && twelveMonthStorageCostUsd !== null ? Math.max(0, creditUsd - twelveMonthStorageCostUsd) : null;
-    const runwayMonths = monthlyStorageCostUsd && creditUsd ? creditUsd / monthlyStorageCostUsd : null;
+    const runwayMonths = monthlyStorageCostUsd && creditUsd ? Math.min(planMonths, creditUsd / monthlyStorageCostUsd) : null;
     return json(res, 200, {
       ...usage,
       usedGb,

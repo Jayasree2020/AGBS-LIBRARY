@@ -1361,15 +1361,12 @@ function storageUsageSummary() {
   const usagePercent = usage.usagePercent === null || usage.usagePercent === undefined ? 0 : Math.max(0, Math.min(100, Number(usage.usagePercent || 0)));
   const planMonths = Number(usage.planMonths || 12);
   const remaining = remainingGb === null ? "Set budget" : formatGb(remainingGb);
-  const runway = usage.runwayMonths === null || usage.runwayMonths === undefined
-    ? `${planMonths}+ months`
-    : `${Math.max(1, Math.floor(Number(usage.runwayMonths || 0))).toLocaleString()} months`;
-  const status = budgetGb && usedGb <= budgetGb ? `On track for ${planMonths} months` : "Over planned storage budget";
+  const status = budgetGb && usedGb <= budgetGb ? `${planMonths}-month plan covered` : "Over planned storage budget";
   return `
     <section class="storage-panel">
       <div class="storage-panel-head">
         <div>
-          <h3>12-month AWS storage runway</h3>
+          <h3>12-month AWS storage plan</h3>
           <p class="subtle">Based on the configured AWS credit/storage plan. This refreshes after uploads and whenever this dashboard opens.</p>
         </div>
         <button class="secondary" type="button" id="refreshStorageUsage">Refresh</button>
@@ -1409,11 +1406,11 @@ function storageUsageSummary() {
         <strong>${usage.remainingCreditUsd === null || usage.remainingCreditUsd === undefined ? "-" : formatUsd(usage.remainingCreditUsd)}</strong>
       </article>
       <article class="stat-card">
-        <span>Status</span>
+        <span>12-month status</span>
         <strong>${status}</strong>
       </article>
     </section>
-    <p class="subtle">Credit model: ${formatUsd(usage.creditUsd)} over ${planMonths} months at about ${formatUsd(usage.storageUsdPerGbMonth)} per GB-month. Estimated credit-only capacity: ${formatGb(usage.creditCapacityGb)}. Active dashboard cap: ${formatGb(budgetGb)}. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
+    <p class="subtle">Credit model: ${formatUsd(usage.creditUsd)} over ${planMonths} months at about ${formatUsd(usage.storageUsdPerGbMonth)} per GB-month. Estimated credit-only capacity: ${formatGb(usage.creditCapacityGb)}. Active dashboard cap: ${formatGb(budgetGb)}. The dashboard is capped to a ${planMonths}-month planning window, not lifetime months. Updated ${usage.updatedAt ? new Date(usage.updatedAt).toLocaleString() : "now"}.</p>
   `;
 }
 

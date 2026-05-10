@@ -26,7 +26,7 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 - Uploaded books are stored in AWS as complete files, not visible upload parts.
 - Admin uploads are automatically published into the library.
 - Valid PDF/EPUB files are added unless the exact same file already exists.
-- The admin dashboard shows total usable storage, current used storage, remaining storage, and 12-month AWS credit runway.
+- The admin dashboard shows total usable storage, current used storage, remaining storage, and whether the current usage fits inside the 12-month AWS credit plan.
 
 ## What The App Does
 
@@ -269,7 +269,7 @@ On this Windows workspace, `START-AGBS-LIBRARY.cmd` can also start the local ser
 5. Keep AWS HTTPS active on `www.agbslibrary.com`.
 6. Keep the Elastic Beanstalk environment load-balanced for SSL.
 7. Keep the site branding aligned with the seminary logo.
-8. Show AWS storage capacity, real-time usage, remaining TB/GB, and 12-month credit runway in the admin dashboard.
+8. Show AWS storage capacity, real-time usage, remaining TB/GB, and 12-month credit coverage in the admin dashboard.
 9. Keep uploads automated: no manual publish button.
 10. Keep student uploads disabled.
 11. Upload books from the admin dashboard in batches.
