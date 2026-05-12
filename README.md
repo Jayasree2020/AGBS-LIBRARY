@@ -66,6 +66,8 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 
 Admins can add more categories from the dashboard.
 
+`Auto Categorization` is a special admin upload intake category. It is not a final student shelf. Admins can choose it when uploading a mixed folder or ZIP, and the app will sort each book into the best matching real library category.
+
 Language books are organized under the single visible `Languages` folder. English, Greek, and Hebrew are handled as automatic subcategories under that folder for cataloging and admin correction.
 
 ## Upload Workflow
@@ -89,6 +91,7 @@ Upload behavior:
 - Every supported file is saved as an e-book resource.
 - Uploads are automatically published.
 - Exact duplicate PDFs/EPUBs are skipped by file hash.
+- Mixed uploads can use the `Auto Categorization` intake category so the app sorts each book into the relevant department.
 - Similar filenames or similar file sizes are not enough to skip a book.
 - Files are skipped only when they are not PDF/EPUB.
 - Admins can clear selected files before starting an upload.

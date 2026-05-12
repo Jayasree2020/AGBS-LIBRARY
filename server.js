@@ -41,6 +41,7 @@ const STORAGE_DIR = path.join(RUNTIME_DIR, "storage");
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 const defaultCategoryDefinitions = [
+  { name: "Auto Categorization" },
   { name: "Old Testament" },
   { name: "New Testament" },
   { name: "Christian Theology" },
@@ -62,6 +63,7 @@ const defaultCategoryDefinitions = [
   { name: "Pastoral Care and Counselling" }
 ];
 const defaultCategories = defaultCategoryDefinitions.map((category) => category.name);
+const AUTO_SORT_CATEGORY_NAME = "Auto Categorization";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -92,6 +94,14 @@ function resourceExtensionFor(file) {
   const content = Buffer.isBuffer(file?.content) ? file.content : Buffer.from(file?.content || "");
   if (content.subarray(0, 5).toString("utf8") === "%PDF-") return ".pdf";
   return path.extname(filename).toLowerCase();
+}
+
+function isAutoSortCategory(category) {
+  return normalizeCategoryText(category?.name || "") === normalizeCategoryText(AUTO_SORT_CATEGORY_NAME);
+}
+
+function realLibraryCategories(categories) {
+  return (Array.isArray(categories) ? categories : []).filter((category) => !isAutoSortCategory(category));
 }
 
 class JsonStore {
@@ -833,14 +843,15 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
       skippedRecords.push(buildSkippedUpload({ file, reason: "Only PDF and EPUB files are allowed", user, batch, hash }));
       continue;
     }
-    const category = autoCategorize ? (categoryForFile(file.filename, categories) || selectedCategory) : selectedCategory;
+    const contentSample = readableTextSample(file.content);
+    const category = categoryForUpload({ filename: file.filename, categories, selectedCategory, autoCategorize, contentSample });
     const suggested = category?.name || selectedCategory?.name || "";
     const duplicate = seenHashes.get(hash);
     if (duplicate) {
       if (duplicate.id && category?.id && duplicate.categoryId !== category.id) {
         const title = duplicate.title || inferTitle(duplicate.originalFilename || file.filename);
         const author = duplicate.author || inferAuthor(duplicate.originalFilename || file.filename);
-        const classification = classifyResource({ title, originalFilename: duplicate.originalFilename || file.filename, category });
+        const classification = classifyResource({ title, originalFilename: duplicate.originalFilename || file.filename, category, contentSample });
         const updated = await db.update("resources", duplicate.id, {
           categoryId: category.id,
           suggestedCategory: suggested || category.name || "",
@@ -887,7 +898,7 @@ async function saveUploadedResources({ files, categories, selectedCategory, auto
     }
     const title = inferTitle(file.filename);
     const author = inferAuthor(file.filename);
-    const classification = classifyResource({ title, originalFilename: file.filename, category });
+    const classification = classifyResource({ title, originalFilename: file.filename, category, contentSample });
     resourceRecords.push({
       title,
       author,
@@ -926,7 +937,8 @@ async function registerDirectUploadedResource({ upload, categories, selectedCate
     if (storageName && typeof db.deleteFile === "function") await db.deleteFile(storageName).catch(() => {});
     return { saved: [], skipped: [skipped] };
   }
-  const category = autoCategorize ? (categoryForFile(filename, categories) || selectedCategory) : selectedCategory;
+  const contentSample = String(upload.contentSample || "");
+  const category = categoryForUpload({ filename, categories, selectedCategory, autoCategorize, contentSample });
   const suggested = category?.name || selectedCategory?.name || "";
   const existing = await db.findOne("resources", (resource) => resource.metadata?.hash === hash);
   if (existing) {
@@ -934,7 +946,7 @@ async function registerDirectUploadedResource({ upload, categories, selectedCate
     if (category?.id && existing.categoryId !== category.id) {
       const title = existing.title || inferTitle(existing.originalFilename || filename);
       const author = existing.author || inferAuthor(existing.originalFilename || filename);
-      const classification = classifyResource({ title, originalFilename: existing.originalFilename || filename, category });
+      const classification = classifyResource({ title, originalFilename: existing.originalFilename || filename, category, contentSample });
       const updated = await db.update("resources", existing.id, {
         categoryId: category.id,
         suggestedCategory: suggested || category.name || "",
@@ -968,7 +980,7 @@ async function registerDirectUploadedResource({ upload, categories, selectedCate
   }
   const title = inferTitle(filename);
   const author = inferAuthor(filename);
-  const classification = classifyResource({ title, originalFilename: filename, category });
+  const classification = classifyResource({ title, originalFilename: filename, category, contentSample });
   const resource = await db.insert("resources", {
     title,
     author,
@@ -1108,8 +1120,17 @@ const deweyRules = [
   { number: "400", label: "Languages", keywords: ["languages", "language studies", "language", "linguistics", "translation", "lexicon", "dictionary"] }
 ];
 
-function classifyResource({ title, originalFilename, category }) {
-  const text = normalizeCategoryText(`${category?.name || ""} ${title || ""} ${originalFilename || ""}`);
+function readableTextSample(buffer, limit = 512000) {
+  const input = Buffer.isBuffer(buffer) ? buffer.subarray(0, limit) : Buffer.from(buffer || "").subarray(0, limit);
+  return input
+    .toString("latin1")
+    .replace(/[^\x20-\x7E]+/g, " ")
+    .replace(/\s+/g, " ")
+    .slice(0, 12000);
+}
+
+function classifyResource({ title, originalFilename, category, contentSample = "" }) {
+  const text = normalizeCategoryText(`${category?.name || ""} ${title || ""} ${originalFilename || ""} ${contentSample || ""}`);
   let best = null;
   for (const rule of deweyRules) {
     let score = 0;
@@ -1123,7 +1144,7 @@ function classifyResource({ title, originalFilename, category }) {
     system: "Dewey Decimal Classification",
     number: best.number,
     label: best.label,
-    source: best.score > 0 ? "Automatic category and filename match" : "Automatic general religion fallback",
+    source: best.score > 0 ? "Automatic category, filename, and content signal match" : "Automatic general religion fallback",
     confidence: best.score >= 3 ? "high" : best.score > 0 ? "medium" : "low"
   };
 }
@@ -1410,11 +1431,13 @@ function compactCategoryText(value) {
   return normalizeCategoryText(value).replace(/\s+/g, "");
 }
 
-function categoryForFile(filename, categories) {
+function categoryForFile(filename, categories, contentSample = "") {
   const raw = String(filename || "");
+  const combined = `${raw} ${contentSample || ""}`;
   const segments = raw.split(/[\\/]+/).filter(Boolean);
   const normalizedSegments = segments.map(normalizeCategoryText);
-  for (const category of categories) {
+  const usableCategories = realLibraryCategories(categories);
+  for (const category of usableCategories) {
     const categoryCompact = compactCategoryText(category.name);
     const direct = normalizedSegments.some((segment) => {
       const segmentCompact = compactCategoryText(segment);
@@ -1422,8 +1445,24 @@ function categoryForFile(filename, categories) {
     });
     if (direct) return category;
   }
-  const suggested = categorySuggestion(raw);
-  return categories.find((item) => compactCategoryText(item.name) === compactCategoryText(suggested)) || null;
+  const suggested = categorySuggestion(combined);
+  return usableCategories.find((item) => compactCategoryText(item.name) === compactCategoryText(suggested)) || null;
+}
+
+function categoryForUpload({ filename, categories, selectedCategory, autoCategorize, contentSample = "" }) {
+  const usableCategories = realLibraryCategories(categories);
+  const forceAuto = isAutoSortCategory(selectedCategory);
+  if (autoCategorize || forceAuto) {
+    const matched = categoryForFile(filename, usableCategories, contentSample);
+    if (matched) return matched;
+    if (selectedCategory && !isAutoSortCategory(selectedCategory)) return selectedCategory;
+    return usableCategories.find((category) => category.name === "Religions")
+      || usableCategories.find((category) => category.name === "Christian Theology")
+      || usableCategories[0]
+      || selectedCategory
+      || null;
+  }
+  return selectedCategory && !isAutoSortCategory(selectedCategory) ? selectedCategory : usableCategories[0] || null;
 }
 
 function categorySuggestion(name) {
@@ -1722,13 +1761,14 @@ async function routeApi(req, res, url) {
     if (!allowedResourceExtensions.includes(extension)) return json(res, 200, { skipped: { filename, reason: "Only PDF and EPUB files are allowed" } });
     const categories = await db.all("categories");
     const selectedCategory = categories.find((item) => item.id === body.targetCategoryId) || categories[0];
-    const category = body.autoCategorize !== false ? (categoryForFile(filename, categories) || selectedCategory) : selectedCategory;
+    const contentSample = String(body.contentSample || "");
+    const category = categoryForUpload({ filename, categories, selectedCategory, autoCategorize: body.autoCategorize !== false, contentSample });
     const existing = await db.findOne("resources", (resource) => resource.metadata?.hash === hash);
     if (existing) {
       if (category?.id && existing.categoryId !== category.id) {
         const title = existing.title || inferTitle(existing.originalFilename || filename);
         const author = existing.author || inferAuthor(existing.originalFilename || filename);
-        const classification = classifyResource({ title, originalFilename: existing.originalFilename || filename, category });
+        const classification = classifyResource({ title, originalFilename: existing.originalFilename || filename, category, contentSample });
         const updated = await db.update("resources", existing.id, {
           categoryId: category.id,
           suggestedCategory: category.name || "",
@@ -1837,7 +1877,8 @@ async function routeApi(req, res, url) {
         name: "files",
         filename: meta.filename,
         contentType: meta.contentType || mimeTypes[path.extname(meta.filename).toLowerCase()] || "application/octet-stream",
-        content: Buffer.concat(buffers)
+        content: Buffer.concat(buffers),
+        contentSample: meta.contentSample || ""
       });
     }
     const files = [];

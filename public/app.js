@@ -339,11 +339,13 @@ async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, l
   state.activeUpload = { ...(state.activeUpload || {}), uploadId };
   const chunkSize = LARGE_UPLOAD_CHUNK_SIZE;
   const filename = uploadFilename(file);
+  const contentSample = await fileContentSample(file);
   const metadata = {
     fileIndex: 0,
     filename,
     contentType: file.type,
-    totalChunks: Math.max(1, Math.ceil(file.size / chunkSize))
+    totalChunks: Math.max(1, Math.ceil(file.size / chunkSize)),
+    contentSample
   };
   if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
   onProgress(`Starting ${fileIndex + 1} of ${totalFiles}: ${filename}`);
@@ -372,6 +374,7 @@ async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, l
 async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress, signal) {
   const hash = file.libraryHash || await fileSha256(file);
   file.libraryHash = hash;
+  const contentSample = await fileContentSample(file);
   onProgress(`Requesting fast AWS upload for ${uploadFilename(file)}...`);
   try {
     const ticket = await api("/api/resources/direct-upload-url", {
@@ -381,6 +384,7 @@ async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress
         contentType: file.type || mimeForFilename(uploadFilename(file)),
         size: file.size,
         hash,
+        contentSample,
         autoCategorize: options.autoCategorize,
         targetCategoryId: options.targetCategoryId
       },
@@ -433,6 +437,7 @@ async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress
           contentType: file.type || mimeForFilename(uploadFilename(file)),
           size: file.size,
           hash,
+          contentSample,
           autoCategorize: options.autoCategorize,
           targetCategoryId: options.targetCategoryId
         },
@@ -451,6 +456,7 @@ async function uploadDirectFile(file, fileIndex, totalFiles, options, onProgress
   const form = new FormData();
   form.append("autoCategorize", String(options.autoCategorize));
   form.append("targetCategoryId", options.targetCategoryId);
+  form.append("contentSample", await fileContentSample(file));
   form.append("files", file, uploadFilename(file));
   onProgress(`Uploading ${uploadFilename(file)} in fast mode...`);
   return await requestWithUploadProgress("/api/resources/upload", {
@@ -496,6 +502,25 @@ function uploadAuthHeaders() {
 
 function uploadFileKey(file) {
   return `${uploadFilename(file)}::${file.size}::${file.lastModified || 0}`;
+}
+
+function readableSampleFromText(text) {
+  return String(text || "")
+    .replace(/[^\x20-\x7E]+/g, " ")
+    .replace(/\s+/g, " ")
+    .slice(0, 12000);
+}
+
+async function fileContentSample(file) {
+  if (!file || file.libraryContentSample) return file?.libraryContentSample || "";
+  try {
+    const buffer = await file.slice(0, Math.min(file.size || 0, 512 * 1024)).arrayBuffer();
+    const sample = readableSampleFromText(new TextDecoder("latin1").decode(buffer));
+    file.libraryContentSample = sample;
+    return sample;
+  } catch {
+    return "";
+  }
 }
 
 function addPendingUploadFiles(files) {
@@ -888,8 +913,16 @@ function categoryLabel(category) {
   return category.parentName ? `${category.parentName} / ${category.name}` : category.name;
 }
 
+function isAutoSortCategory(category) {
+  return String(category?.name || "").trim().toLowerCase() === "auto categorization";
+}
+
 function mainCategories() {
-  return (Array.isArray(state.categories) ? state.categories : []).filter((category) => !category.parentName);
+  return (Array.isArray(state.categories) ? state.categories : []).filter((category) => !category.parentName && !isAutoSortCategory(category));
+}
+
+function assignableCategories() {
+  return (Array.isArray(state.categories) ? state.categories : []).filter((category) => !isAutoSortCategory(category));
 }
 
 function categoryAndChildIds(category) {
@@ -1001,7 +1034,7 @@ function libraryResourceRow(resource) {
       ${staff ? `
         <td class="library-admin-edit">
           <select data-library-category="${resource.id}" aria-label="Change category for ${escapeAttr(resource.title)}">
-            ${state.categories.map((item) => `<option value="${item.id}" ${item.id === resource.categoryId ? "selected" : ""}>${escapeHtml(categoryLabel(item))}</option>`).join("")}
+            ${assignableCategories().map((item) => `<option value="${item.id}" ${item.id === resource.categoryId ? "selected" : ""}>${escapeHtml(categoryLabel(item))}</option>`).join("")}
           </select>
           <button class="secondary" data-library-save="${resource.id}">Save category</button>
         </td>
@@ -1262,15 +1295,16 @@ async function adminPage() {
               <span>The app will scan every subfolder it receives.</span>
             </div>
             <p class="subtle upload-help">Only PDF and EPUB books are allowed. ZIP folders are supported: choose a .zip file and the app will open it, find PDFs/EPUBs inside its folders, and upload each one as a separate library book.</p>
+            <p class="subtle upload-help">For mixed folders with many kinds of books, choose <strong>Auto Categorization - mixed books intake</strong>. The app uses file names, folder names, title signals, and readable content hints to place each book into the proper library category.</p>
             <label>Upload handling
               <select name="autoCategorize" id="autoCategorize">
                 <option value="true">Auto-categorize by file and folder names</option>
                 <option value="false">Put everything into one category</option>
               </select>
             </label>
-            <label>Category for manual uploads
+            <label>Category / intake folder
               <select name="targetCategoryId" id="targetCategoryId">
-                ${state.categories.map((category) => `<option value="${category.id}">${escapeHtml(categoryLabel(category))}</option>`).join("")}
+                ${uploadCategoryOptions()}
               </select>
             </label>
             <div class="button-row">
@@ -1414,6 +1448,21 @@ function storageUsageSummary() {
   `;
 }
 
+function uploadCategoryOptions() {
+  const categories = Array.isArray(state.categories) ? [...state.categories] : [];
+  categories.sort((a, b) => {
+    if (isAutoSortCategory(a)) return -1;
+    if (isAutoSortCategory(b)) return 1;
+    return Number(a.order || 0) - Number(b.order || 0);
+  });
+  return categories.map((category) => {
+    const label = isAutoSortCategory(category)
+      ? "Auto Categorization - mixed books intake"
+      : categoryLabel(category);
+    return `<option value="${category.id}">${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
 function bookCountSummary() {
   const counts = state.resourceCounts || { total: 0, byCategory: {} };
   const categories = mainCategories();
@@ -1442,7 +1491,7 @@ function adminResourceRow(resource) {
   return `
     <tr>
       <td><input data-title="${resource.id}" value="${escapeAttr(resource.title)}"></td>
-      <td><select data-category="${resource.id}">${state.categories.map((category) => `<option value="${category.id}" ${category.id === resource.categoryId ? "selected" : ""}>${escapeHtml(categoryLabel(category))}</option>`).join("")}</select></td>
+      <td><select data-category="${resource.id}">${assignableCategories().map((category) => `<option value="${category.id}" ${category.id === resource.categoryId ? "selected" : ""}>${escapeHtml(categoryLabel(category))}</option>`).join("")}</select></td>
       <td><strong>${escapeHtml(classification.number || "")}</strong><br><span class="subtle">${escapeHtml(classification.label || "")}</span></td>
       <td><span class="badge published">${escapeHtml(resource.format)}</span></td>
       <td>
@@ -1697,6 +1746,8 @@ function wireAdmin() {
       autoCategorize: document.querySelector("#autoCategorize").value === "true",
       targetCategoryId: document.querySelector("#targetCategoryId").value
     };
+    const targetCategory = state.categories.find((category) => category.id === options.targetCategoryId);
+    if (isAutoSortCategory(targetCategory)) options.autoCategorize = true;
     const markUploadFileFinished = async (file) => {
       const key = uploadFileKey(file);
       state.pendingUploadFiles = state.pendingUploadFiles.filter((item) => uploadFileKey(item) !== key);

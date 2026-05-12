@@ -176,11 +176,13 @@ The S3 bucket must allow browser uploads from the live domain:
 
 - Use Chrome or Edge for very large folder uploads.
 - Use **Open folder tree** in the admin upload panel.
+- For mixed folders, choose **Auto Categorization - mixed books intake** as the upload category.
 - Keep the computer awake while uploading.
 - Uploads go directly to S3 where possible.
 - Catalog writes are serialized so parallel uploads do not overwrite resource records.
 - Exact duplicate files are skipped by content hash.
 - ZIP files are opened in the browser and valid PDF/EPUB files inside are uploaded as individual books.
+- The auto-categorization intake is not used as a final shelf; books are placed into the matching real library category.
 
 ## Verification Checklist
 
