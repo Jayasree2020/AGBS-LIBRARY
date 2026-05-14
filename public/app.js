@@ -30,8 +30,10 @@ const UPLOAD_STORE_NAME = "files";
 const UPLOAD_STATE_KEY = "agbs-upload-state";
 const LARGE_UPLOAD_CHUNK_SIZE = 3 * 1024 * 1024;
 const DIRECT_FILE_UPLOAD_LIMIT = 3 * 1024 * 1024;
-const DIRECT_UPLOAD_CONCURRENCY = 4;
+const DIRECT_UPLOAD_CONCURRENCY = 2;
 let catalogWriteQueue = Promise.resolve();
+let lastUploadTableRefreshAt = 0;
+let lastStorageRefreshAt = 0;
 
 class ApiError extends Error {
   constructor(message, status) {
@@ -53,6 +55,14 @@ async function api(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new ApiError(data.error || "Request failed.", response.status);
   return data;
+}
+
+function yieldToBrowser() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function yieldEvery(index, interval = 50) {
+  if (index > 0 && index % interval === 0) await yieldToBrowser();
 }
 
 function isAuthError(error) {
@@ -153,19 +163,24 @@ async function withUploadStore(mode, callback) {
 async function saveUploadQueueFiles(files) {
   const items = Array.from(files || []);
   if (!items.length) return;
-  await withUploadStore("readwrite", (store) => {
-    for (const file of items) {
-      store.put({
-        key: uploadFileKey(file),
-        filename: uploadFilename(file),
-        libraryPath: uploadFilename(file),
-        type: file.type,
-        size: file.size,
-        lastModified: file.lastModified || Date.now(),
-        file
-      });
-    }
-  });
+  const batchSize = 250;
+  for (let start = 0; start < items.length; start += batchSize) {
+    const batch = items.slice(start, start + batchSize);
+    await withUploadStore("readwrite", (store) => {
+      for (const file of batch) {
+        store.put({
+          key: uploadFileKey(file),
+          filename: uploadFilename(file),
+          libraryPath: uploadFilename(file),
+          type: file.type,
+          size: file.size,
+          lastModified: file.lastModified || Date.now(),
+          file
+        });
+      }
+    });
+    await yieldToBrowser();
+  }
 }
 
 async function loadUploadQueueFiles() {
@@ -218,7 +233,10 @@ async function walkDroppedEntry(entry, parentPath = "") {
   while (true) {
     const entries = await readDirectoryEntries(reader);
     if (!entries.length) break;
-    for (const child of entries) files.push(...await walkDroppedEntry(child, fullPath));
+    for (let index = 0; index < entries.length; index++) {
+      files.push(...await walkDroppedEntry(entries[index], fullPath));
+      await yieldEvery(index, 50);
+    }
   }
   return files;
 }
@@ -227,9 +245,11 @@ async function filesFromDrop(event) {
   const items = Array.from(event.dataTransfer?.items || []);
   if (items.length && items.some((item) => typeof item.webkitGetAsEntry === "function")) {
     const files = [];
-    for (const item of items) {
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index];
       const entry = item.webkitGetAsEntry?.();
       if (entry) files.push(...await walkDroppedEntry(entry));
+      await yieldEvery(index, 10);
     }
     return files;
   }
@@ -238,6 +258,7 @@ async function filesFromDrop(event) {
 
 async function walkDirectoryHandle(handle, parentPath = "") {
   const files = [];
+  let index = 0;
   for await (const [name, child] of handle.entries()) {
     const childPath = joinLibraryPath(parentPath, name);
     if (child.kind === "file") {
@@ -247,6 +268,8 @@ async function walkDirectoryHandle(handle, parentPath = "") {
     } else if (child.kind === "directory") {
       files.push(...await walkDirectoryHandle(child, childPath));
     }
+    index += 1;
+    await yieldEvery(index, 50);
   }
   return files;
 }
@@ -272,7 +295,11 @@ function hexFromBytes(buffer) {
 }
 
 async function fileSha256(file) {
-  return hexFromBytes(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
+  const buffer = await file.arrayBuffer();
+  await yieldToBrowser();
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  await yieldToBrowser();
+  return hexFromBytes(digest);
 }
 
 async function duplicateSkipForFile(file, seenHashes, knownHashes) {
@@ -367,6 +394,7 @@ async function sendFileChunks(file, fileIndex, totalFiles, onProgress, signal, l
     });
     setUploadProgress(fileIndex + ((chunkIndex + 1) / metadata.totalChunks), totalFiles, `${label} ${filename}: ${chunkIndex + 1} of ${metadata.totalChunks} steps.`);
     onProgress(`${label} ${filename}: ${chunkIndex + 1} of ${metadata.totalChunks} steps.`);
+    await yieldToBrowser();
   }
   return { uploadId, metadata };
 }
@@ -569,6 +597,7 @@ async function uploadZipFile(file, fileIndex, totalFiles, options, onProgress, o
   }
   for (let entryIndex = 0; entryIndex < supportedEntries.length; entryIndex++) {
     if (signal?.aborted) throw new DOMException("Upload stopped.", "AbortError");
+    await yieldToBrowser();
     const entry = supportedEntries[entryIndex];
     onProgress(`Opening ZIP folder file ${entryIndex + 1} of ${supportedEntries.length}: ${entry.name}`);
     try {
@@ -673,6 +702,7 @@ async function uploadChunked(files, options, onProgress, onFileSaved, signal, on
       const fileIndex = nextIndex;
       nextIndex += 1;
       await processFile(fileIndex);
+      await yieldToBrowser();
     }
   };
   const concurrency = Math.min(DIRECT_UPLOAD_CONCURRENCY, Math.max(1, files.length));
@@ -1795,10 +1825,9 @@ function wireAdmin() {
               if (resource.metadata?.hash) knownHashes.add(resource.metadata.hash);
               state.resourceCounts.byCategory[resource.categoryId || ""] = Number(state.resourceCounts.byCategory[resource.categoryId || ""] || 0) + 1;
             }
-            refreshStorageUsage().catch(() => {});
+            refreshStorageUsageIfDue();
           }
-          refreshResourceReviewTable();
-          wireResourceActions();
+          refreshUploadTableIfDue();
         }, uploadController.signal, markUploadFileFinished, knownHashes);
       } else {
         const uploadFiles = [];
@@ -1850,9 +1879,8 @@ function wireAdmin() {
       }
       try {
         await loadAdminSummary();
-        refreshResourceReviewTable();
+        refreshUploadTableIfDue(true);
         await refreshStorageUsage();
-        wireResourceActions();
       } catch {
         addUploadLog("Upload finished. Refresh the admin page if the newest list is not visible yet.");
       }
@@ -1935,6 +1963,21 @@ async function refreshStorageUsage() {
   if (!wrap) return;
   await loadStorageUsage();
   wrap.innerHTML = storageUsageSummary();
+}
+
+function refreshUploadTableIfDue(force = false) {
+  const now = Date.now();
+  if (!force && now - lastUploadTableRefreshAt < 1200) return;
+  lastUploadTableRefreshAt = now;
+  refreshResourceReviewTable();
+  wireResourceActions();
+}
+
+function refreshStorageUsageIfDue(force = false) {
+  const now = Date.now();
+  if (!force && now - lastStorageRefreshAt < 8000) return;
+  lastStorageRefreshAt = now;
+  refreshStorageUsage().catch(() => {});
 }
 
 function wireStudentActions() {
