@@ -153,6 +153,7 @@ Default departments:
 - Music
 - Homiletics
 - Pastoral Care and Counselling
+- Articles
 
 Admins can add more categories from the admin dashboard.
 

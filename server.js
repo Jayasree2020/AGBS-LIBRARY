@@ -60,7 +60,8 @@ const defaultCategoryDefinitions = [
   { name: "Research Methodology" },
   { name: "Music" },
   { name: "Homiletics" },
-  { name: "Pastoral Care and Counselling" }
+  { name: "Pastoral Care and Counselling" },
+  { name: "Articles" }
 ];
 const defaultCategories = defaultCategoryDefinitions.map((category) => category.name);
 const AUTO_SORT_CATEGORY_NAME = "Auto Categorization";
@@ -1117,7 +1118,8 @@ const deweyRules = [
   { number: "420", label: "English", keywords: ["english", "english language", "grammar", "composition", "reading english", "writing english"] },
   { number: "480", label: "Greek", keywords: ["greek", "biblical greek", "koine", "koine greek", "new testament greek"] },
   { number: "492.4", label: "Hebrew", keywords: ["hebrew", "biblical hebrew", "hebrew bible", "old testament hebrew"] },
-  { number: "400", label: "Languages", keywords: ["languages", "language studies", "language", "linguistics", "translation", "lexicon", "dictionary"] }
+  { number: "400", label: "Languages", keywords: ["languages", "language studies", "language", "linguistics", "translation", "lexicon", "dictionary"] },
+  { number: "050", label: "Articles", keywords: ["articles", "article", "journal article", "journal", "paper", "essay", "review article", "periodical", "bulletin", "newsletter"] }
 ];
 
 function readableTextSample(buffer, limit = 512000) {
@@ -1485,6 +1487,7 @@ function categorySuggestion(name) {
     ["Music", ["music", "hymn", "hymns", "hymnology", "choir", "song", "songs", "worship music"]],
     ["Homiletics", ["homiletic", "homiletics", "preaching", "sermon", "sermons", "expository preaching"]],
     ["Pastoral Care and Counselling", ["pastoral care", "pastoral counselling", "pastoral counseling", "counselling", "counseling", "chaplain", "grief"]],
+    ["Articles", ["article", "articles", "journal article", "journal", "paper", "essay", "review article", "periodical", "bulletin", "newsletter"]],
     ["Greek", ["greek", "biblical greek", "koine", "koine greek"]],
     ["Hebrew", ["hebrew", "biblical hebrew", "old testament hebrew"]],
     ["English", ["english", "english language", "grammar", "composition"]],

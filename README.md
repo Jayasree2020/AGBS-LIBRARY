@@ -63,6 +63,7 @@ GitHub repository: [https://github.com/Jayasree2020/AGBS-LIBRARY](https://github
 - Music
 - Homiletics
 - Pastoral Care and Counselling
+- Articles
 
 Admins can add more categories from the dashboard.
 
